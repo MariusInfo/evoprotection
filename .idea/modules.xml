@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/evoprotection.iml" filepath="$PROJECT_DIR$/.idea/modules/evoprotection.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/org.evocraft.evoprotection.main.iml" filepath="$PROJECT_DIR$/.idea/modules/org.evocraft.evoprotection.main.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/org.evocraft.evoprotection.test.iml" filepath="$PROJECT_DIR$/.idea/modules/org.evocraft.evoprotection.test.iml" />
+    </modules>
+  </component>
+</project>
