@@ -211,7 +211,7 @@ public class PacketHandler {
             supplier.get().enqueueWork(() -> {
                 ServerPlayer player = supplier.get().getSender();
                 if (player != null) {
-                    ClaimManager.get().unclaimByName(player, claimName);
+                    ClaimManager.get().unclaimById(player, claimName);
                 }
             });
             supplier.get().setPacketHandled(true);
@@ -248,17 +248,21 @@ public class PacketHandler {
                 ServerPlayer player = supplier.get().getSender();
                 if (player != null) {
                     String lang = ClaimManager.get().getPlayerLanguage(player.getUUID());
-                    UUID targetUUID = (isAdmin && player.hasPermissions(2)) ? new UUID(0, 0) : player.getUUID();
-                    ClaimManager.get().setFlag(targetUUID, claimName, flagName, state);
+                    boolean adminAction = isAdmin && player.hasPermissions(2);
+                    if (isAdmin && !adminAction) return;
 
-                    if (isAdmin) {
+                    UUID targetUUID = adminAction ? new UUID(0, 0) : player.getUUID();
+                    if (!ClaimManager.get().setFlag(targetUUID, claimName, flagName, state)) return;
+
+                    if (adminAction) {
                         ClaimManager.get().syncToAdminClient(player);
                     } else {
                         ClaimManager.get().syncToClient(player);
                     }
 
                     String statusStr = state ? LanguageManager.get(lang, "gui.status.on") : LanguageManager.get(lang, "gui.status.off");
-                    player.sendSystemMessage(Component.literal(LanguageManager.get(lang, "msg.flag.updated", flagName, claimName, statusStr)));
+                    String displayName = ClaimManager.get().getClaimDisplayName(claimName);
+                    player.sendSystemMessage(Component.literal(LanguageManager.get(lang, "msg.flag.updated", flagName, displayName, statusStr)));
                 }
             });
             supplier.get().setPacketHandled(true);
@@ -293,10 +297,12 @@ public class PacketHandler {
             supplier.get().enqueueWork(() -> {
                 ServerPlayer player = supplier.get().getSender();
                 if (player != null) {
+                    ChunkPos target = new ChunkPos(chunkX, chunkZ);
+                    if (!ClaimManager.get().isChunkInsideClientMap(player, target)) return;
                     if (isClaiming) {
-                        ClaimManager.get().claimChunk(player, new ChunkPos(chunkX, chunkZ), customName);
+                        ClaimManager.get().claimChunk(player, target, customName);
                     } else {
-                        ClaimManager.get().unclaimChunk(player, new ChunkPos(chunkX, chunkZ));
+                        ClaimManager.get().unclaimChunk(player, target);
                     }
                 }
             });
@@ -332,11 +338,13 @@ public class PacketHandler {
             supplier.get().enqueueWork(() -> {
                 ServerPlayer player = supplier.get().getSender();
                 if (player != null && player.hasPermissions(2)) {
+                    ChunkPos target = new ChunkPos(chunkX, chunkZ);
+                    if (!ClaimManager.get().isChunkInsideClientMap(player, target)) return;
                     String dim = player.level().dimension().location().toString();
                     if (isClaiming) {
-                        ClaimManager.get().adminClaim(new ChunkPos(chunkX, chunkZ), dim, customName);
+                        ClaimManager.get().adminClaim(target, dim, customName);
                     } else {
-                        ClaimManager.get().removeAnyClaim(new ChunkPos(chunkX, chunkZ), dim);
+                        ClaimManager.get().removeAnyClaim(target, dim);
                     }
                     ClaimManager.get().syncToAdminClient(player);
                 }
@@ -378,15 +386,19 @@ public class PacketHandler {
                     if (isAdding) {
                         ServerPlayer target = player.getServer().getPlayerList().getPlayerByName(targetName);
                         if (target != null) {
-                            ClaimManager.get().addTrust(player, target.getUUID(), claimName);
-                            player.sendSystemMessage(Component.literal(LanguageManager.get(lang, "msg.trust.added", target.getName().getString(), claimName)));
+                            if (ClaimManager.get().addTrust(player, target.getUUID(), claimName)) {
+                                String displayName = ClaimManager.get().getClaimDisplayName(claimName);
+                                player.sendSystemMessage(Component.literal(LanguageManager.get(lang, "msg.trust.added", target.getName().getString(), displayName)));
+                            }
                         } else {
                             player.sendSystemMessage(Component.literal(LanguageManager.get(lang, "msg.trust.offline")));
                         }
                     } else {
                         try {
-                            ClaimManager.get().removeTrust(player, UUID.fromString(targetUuidStr), claimName);
-                            player.sendSystemMessage(Component.literal(LanguageManager.get(lang, "msg.trust.removed", claimName)));
+                            if (ClaimManager.get().removeTrust(player, UUID.fromString(targetUuidStr), claimName)) {
+                                String displayName = ClaimManager.get().getClaimDisplayName(claimName);
+                                player.sendSystemMessage(Component.literal(LanguageManager.get(lang, "msg.trust.removed", displayName)));
+                            }
                         } catch (Exception ignored) {}
                     }
                 }

@@ -23,9 +23,15 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 public class ClaimManager {
     private static ClaimManager INSTANCE;
+    private static final UUID ADMIN_UUID = new UUID(0, 0);
+    private static final int CLIENT_MAP_RADIUS = 4;
     private final Gson GSON = new GsonBuilder().create();
 
     private final Map<String, UUID> chunkOwners = new ConcurrentHashMap<>();
@@ -34,6 +40,11 @@ public class ClaimManager {
     private final Map<UUID, Integer> boughtSlots = new ConcurrentHashMap<>();
     private final Map<UUID, Map<String, Set<UUID>>> trustedPlayers = new ConcurrentHashMap<>();
     private final Map<UUID, Map<String, Map<String, Boolean>>> claimFlags = new ConcurrentHashMap<>();
+    private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "EvoProtection-DB");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     // Dicționar pentru limba fiecărui jucător luată din Launcher (tabelul 'players')
     private final Map<UUID, String> playerLanguages = new ConcurrentHashMap<>();
@@ -45,6 +56,129 @@ public class ClaimManager {
     private String getTblSettings() { return ProtectionConfig.get().isPlotMode ? "plot_player_settings" : "claim_player_settings"; }
     private String getTblFlags() { return ProtectionConfig.get().isPlotMode ? "plot_flags_data" : "claim_flags_data"; }
     private String getTblEvents() { return ProtectionConfig.get().isPlotMode ? "plot_global_events" : "claim_global_events"; }
+
+    private void queueDbWrite(Runnable task) {
+        dbExecutor.execute(() -> {
+            synchronized (DatabaseManager.get()) {
+                try {
+                    task.run();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        });
+    }
+
+    private String makeChunkKey(ChunkPos pos, String dim) {
+        return pos.x + ";" + pos.z + ";" + dim;
+    }
+
+    private String makeChunkClaimId(ChunkPos pos, String dim) {
+        return "chunk;" + makeChunkKey(pos, dim);
+    }
+
+    private String makePlotClaimId(int plotX, int plotZ, String dim) {
+        return "plot;" + plotX + ";" + plotZ + ";" + dim;
+    }
+
+    public String getClaimId(ChunkPos pos, String dim) {
+        UUID owner = getChunkOwner(pos, dim);
+        if (ProtectionConfig.get().isPlotMode && owner != null && !ADMIN_UUID.equals(owner)) {
+            int[] plotCoords = getPlotCoordsFromChunk(pos);
+            return makePlotClaimId(plotCoords[0], plotCoords[1], dim);
+        }
+        return makeChunkClaimId(pos, dim);
+    }
+
+    private String getClaimIdFromChunkKey(String chunkKey) {
+        String[] parts = chunkKey.split(";", 3);
+        if (parts.length < 3) return "chunk;" + chunkKey;
+        return getClaimId(new ChunkPos(Integer.parseInt(parts[0]), Integer.parseInt(parts[1])), parts[2]);
+    }
+
+    private boolean claimIdMatchesChunkKey(String claimId, String chunkKey) {
+        return claimId != null && claimId.equals(getClaimIdFromChunkKey(chunkKey));
+    }
+
+    private List<String> getChunkKeysForClaimId(String claimId, UUID expectedOwner) {
+        List<String> keys = new ArrayList<>();
+        if (claimId == null || claimId.isEmpty()) return keys;
+
+        for (Map.Entry<String, UUID> entry : chunkOwners.entrySet()) {
+            if (expectedOwner != null && !expectedOwner.equals(entry.getValue())) continue;
+            if (claimIdMatchesChunkKey(claimId, entry.getKey())) {
+                keys.add(entry.getKey());
+            }
+        }
+        return keys;
+    }
+
+    public boolean ownsClaim(UUID owner, String claimId) {
+        return owner != null && !getChunkKeysForClaimId(claimId, owner).isEmpty();
+    }
+
+    public boolean isChunkInsideClientMap(ServerPlayer player, ChunkPos target) {
+        if (player == null || target == null) return false;
+        ChunkPos center = player.chunkPosition();
+        return Math.abs(target.x - center.x) <= CLIENT_MAP_RADIUS && Math.abs(target.z - center.z) <= CLIENT_MAP_RADIUS;
+    }
+
+    public String getClaimDisplayName(String claimId) {
+        if (claimId == null || claimId.isEmpty()) return "";
+
+        for (String key : getChunkKeysForClaimId(claimId, null)) {
+            String name = chunkCustomNames.get(key);
+            if (name != null && !name.trim().isEmpty()) return name;
+        }
+
+        String[] parts = claimId.split(";", 4);
+        if (parts.length >= 3) {
+            if ("plot".equals(parts[0])) return "Plot " + parts[1] + "," + parts[2];
+            if ("chunk".equals(parts[0])) return "Chunk " + parts[1] + "," + parts[2];
+        }
+        return claimId;
+    }
+
+    private Set<UUID> getTrustedSet(UUID owner, String claimId) {
+        Map<String, Set<UUID>> trusts = trustedPlayers.get(owner);
+        if (trusts == null) return Collections.emptySet();
+
+        Set<UUID> exact = trusts.get(claimId);
+        if (exact != null) return exact;
+
+        Set<UUID> legacy = trusts.get(getClaimDisplayName(claimId));
+        return legacy != null ? legacy : Collections.emptySet();
+    }
+
+    private Map<String, Boolean> getFlagsForClaim(UUID owner, String claimId) {
+        Map<String, Map<String, Boolean>> flags = claimFlags.get(owner);
+        if (flags == null) return Collections.emptyMap();
+
+        Map<String, Boolean> exact = flags.get(claimId);
+        if (exact != null) return exact;
+
+        Map<String, Boolean> legacy = flags.get(getClaimDisplayName(claimId));
+        return legacy != null ? legacy : Collections.emptyMap();
+    }
+
+    private void removeClaimMetadata(UUID owner, String claimId) {
+        if (owner == null || claimId == null || claimId.isEmpty()) return;
+        String legacyName = getClaimDisplayName(claimId);
+
+        Map<String, Set<UUID>> trusts = trustedPlayers.get(owner);
+        if (trusts != null) {
+            trusts.remove(claimId);
+            trusts.remove(legacyName);
+            savePlayerSettings(owner);
+        }
+
+        Map<String, Map<String, Boolean>> flags = claimFlags.get(owner);
+        if (flags != null) {
+            flags.remove(claimId);
+            flags.remove(legacyName);
+            savePlayerFlags(owner);
+        }
+    }
 
     public static void initialize() {
         if (INSTANCE == null) {
@@ -192,99 +326,107 @@ public class ClaimManager {
     }
 
     private void saveGlobalEvent() {
-        new Thread(() -> {
-            synchronized (DatabaseManager.get()) {
-                try {
-                    Connection conn = DatabaseManager.get().getConnection();
-                    try (PreparedStatement stmt = conn.prepareStatement(
-                            "INSERT INTO " + getTblEvents() + " (id, stock, price) VALUES (1, ?, ?) " +
-                                    "ON DUPLICATE KEY UPDATE stock = ?, price = ?")) {
-                        stmt.setInt(1, eventStock);
-                        stmt.setDouble(2, eventPrice);
-                        stmt.setInt(3, eventStock);
-                        stmt.setDouble(4, eventPrice);
-                        stmt.executeUpdate();
-                    }
-                } catch (Exception e) { e.printStackTrace(); }
+        final int stock = eventStock;
+        final double price = eventPrice;
+        final String table = getTblEvents();
+        queueDbWrite(() -> {
+            try {
+                Connection conn = DatabaseManager.get().getConnection();
+                try (PreparedStatement stmt = conn.prepareStatement(
+                        "INSERT INTO " + table + " (id, stock, price) VALUES (1, ?, ?) " +
+                                "ON DUPLICATE KEY UPDATE stock = ?, price = ?")) {
+                    stmt.setInt(1, stock);
+                    stmt.setDouble(2, price);
+                    stmt.setInt(3, stock);
+                    stmt.setDouble(4, price);
+                    stmt.executeUpdate();
+                }
+            } catch (Exception e) {
+                throw new RuntimeException(e);
             }
-        }).start();
+        });
     }
 
     private void savePlayerSettings(UUID uuid) {
         if (uuid == null) return;
         final String name = playerNames.getOrDefault(uuid, "Unknown");
         final int slots = boughtSlots.getOrDefault(uuid, 1);
-        final String trustedData = GSON.toJson(trustedPlayers.getOrDefault(uuid, new HashMap<>()));
+        final String trustedData = GSON.toJson(new HashMap<>(trustedPlayers.getOrDefault(uuid, new HashMap<>())));
+        final String table = getTblSettings();
 
-        new Thread(() -> {
-            synchronized (DatabaseManager.get()) {
-                try {
-                    Connection conn = DatabaseManager.get().getConnection();
-                    try (PreparedStatement stmt = conn.prepareStatement(
-                            "INSERT INTO " + getTblSettings() + " (uuid, player_name, bought_slots, trusted_data) " +
-                                    "VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE player_name = ?, bought_slots = ?, trusted_data = ?")) {
-                        stmt.setString(1, uuid.toString());
-                        stmt.setString(2, name);
-                        stmt.setInt(3, slots);
-                        stmt.setString(4, trustedData);
-                        stmt.setString(5, name);
-                        stmt.setInt(6, slots);
-                        stmt.setString(7, trustedData);
-                        stmt.executeUpdate();
-                    }
-                } catch (Exception e) { e.printStackTrace(); }
+        queueDbWrite(() -> {
+            try {
+                Connection conn = DatabaseManager.get().getConnection();
+                try (PreparedStatement stmt = conn.prepareStatement(
+                        "INSERT INTO " + table + " (uuid, player_name, bought_slots, trusted_data) " +
+                                "VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE player_name = ?, bought_slots = ?, trusted_data = ?")) {
+                    stmt.setString(1, uuid.toString());
+                    stmt.setString(2, name);
+                    stmt.setInt(3, slots);
+                    stmt.setString(4, trustedData);
+                    stmt.setString(5, name);
+                    stmt.setInt(6, slots);
+                    stmt.setString(7, trustedData);
+                    stmt.executeUpdate();
+                }
+            } catch (Exception e) {
+                throw new RuntimeException(e);
             }
-        }).start();
+        });
     }
 
     private void savePlayerFlags(UUID uuid) {
         if (uuid == null) return;
-        final String flagsData = GSON.toJson(claimFlags.getOrDefault(uuid, new HashMap<>()));
-        new Thread(() -> {
-            synchronized (DatabaseManager.get()) {
-                try {
-                    Connection conn = DatabaseManager.get().getConnection();
-                    try (PreparedStatement stmt = conn.prepareStatement("INSERT INTO " + getTblFlags() + " (uuid, flags_data) VALUES (?, ?) ON DUPLICATE KEY UPDATE flags_data = ?")) {
-                        stmt.setString(1, uuid.toString());
-                        stmt.setString(2, flagsData);
-                        stmt.setString(3, flagsData);
-                        stmt.executeUpdate();
-                    }
-                } catch (Exception e) { e.printStackTrace(); }
+        final String flagsData = GSON.toJson(new HashMap<>(claimFlags.getOrDefault(uuid, new HashMap<>())));
+        final String table = getTblFlags();
+        queueDbWrite(() -> {
+            try {
+                Connection conn = DatabaseManager.get().getConnection();
+                try (PreparedStatement stmt = conn.prepareStatement("INSERT INTO " + table + " (uuid, flags_data) VALUES (?, ?) ON DUPLICATE KEY UPDATE flags_data = ?")) {
+                    stmt.setString(1, uuid.toString());
+                    stmt.setString(2, flagsData);
+                    stmt.setString(3, flagsData);
+                    stmt.executeUpdate();
+                }
+            } catch (Exception e) {
+                throw new RuntimeException(e);
             }
-        }).start();
+        });
     }
 
     private void saveClaim(String chunkKey, UUID ownerUuid, String customName) {
-        new Thread(() -> {
-            synchronized (DatabaseManager.get()) {
-                try {
-                    Connection conn = DatabaseManager.get().getConnection();
-                    try (PreparedStatement stmt = conn.prepareStatement("INSERT INTO " + getTblClaims() + " (chunk_key, owner_uuid, custom_name) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE owner_uuid = ?, custom_name = ?")) {
-                        stmt.setString(1, chunkKey);
-                        stmt.setString(2, ownerUuid.toString());
-                        stmt.setString(3, customName != null ? customName : "");
-                        stmt.setString(4, ownerUuid.toString());
-                        stmt.setString(5, customName != null ? customName : "");
-                        stmt.executeUpdate();
-                    }
-                } catch (Exception e) { e.printStackTrace(); }
+        final String name = customName != null ? customName : "";
+        final String table = getTblClaims();
+        queueDbWrite(() -> {
+            try {
+                Connection conn = DatabaseManager.get().getConnection();
+                try (PreparedStatement stmt = conn.prepareStatement("INSERT INTO " + table + " (chunk_key, owner_uuid, custom_name) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE owner_uuid = ?, custom_name = ?")) {
+                    stmt.setString(1, chunkKey);
+                    stmt.setString(2, ownerUuid.toString());
+                    stmt.setString(3, name);
+                    stmt.setString(4, ownerUuid.toString());
+                    stmt.setString(5, name);
+                    stmt.executeUpdate();
+                }
+            } catch (Exception e) {
+                throw new RuntimeException(e);
             }
-        }).start();
+        });
     }
 
     private void deleteClaimFromDB(String chunkKey) {
-        new Thread(() -> {
-            synchronized (DatabaseManager.get()) {
-                try {
-                    Connection conn = DatabaseManager.get().getConnection();
-                    try (PreparedStatement stmt = conn.prepareStatement("DELETE FROM " + getTblClaims() + " WHERE chunk_key = ?")) {
-                        stmt.setString(1, chunkKey);
-                        stmt.executeUpdate();
-                    }
-                } catch (Exception e) { e.printStackTrace(); }
+        final String table = getTblClaims();
+        queueDbWrite(() -> {
+            try {
+                Connection conn = DatabaseManager.get().getConnection();
+                try (PreparedStatement stmt = conn.prepareStatement("DELETE FROM " + table + " WHERE chunk_key = ?")) {
+                    stmt.setString(1, chunkKey);
+                    stmt.executeUpdate();
+                }
+            } catch (Exception e) {
+                throw new RuntimeException(e);
             }
-        }).start();
+        });
     }
 
     public ChunkPos getPlotBaseChunk(int plotX, int plotZ) {
@@ -313,11 +455,11 @@ public class ClaimManager {
         Set<String> uniquePlots = new HashSet<>();
         for (Map.Entry<String, UUID> entry : chunkOwners.entrySet()) {
             if (entry.getValue().equals(p)) {
-                String[] parts = entry.getKey().split(";");
+                String[] parts = entry.getKey().split(";", 3);
                 int cx = Integer.parseInt(parts[0]);
                 int cz = Integer.parseInt(parts[1]);
                 int[] coords = getPlotCoordsFromChunk(new ChunkPos(cx, cz));
-                uniquePlots.add(coords[0] + "," + coords[1]);
+                uniquePlots.add(coords[0] + "," + coords[1] + "," + parts[2]);
             }
         }
         return uniquePlots.size();
@@ -394,7 +536,7 @@ public class ClaimManager {
             for(int i = 0; i < P; i++) {
                 for(int j = 0; j < P; j++) {
                     ChunkPos cp = new ChunkPos(base.x + i, base.z + j);
-                    String key = cp.x + ";" + cp.z + ";" + dim;
+                    String key = makeChunkKey(cp, dim);
                     chunkOwners.put(key, player.getUUID());
                     chunkCustomNames.put(key, customName);
                     saveClaim(key, player.getUUID(), customName);
@@ -420,21 +562,25 @@ public class ClaimManager {
         int P = ProtectionConfig.get().plotSizeChunks;
         ChunkPos base = getPlotBaseChunk(plotX, plotZ);
         String dim = player.level().dimension().location().toString();
-        boolean owned = false;
+        List<String> keysToRemove = new ArrayList<>();
 
         for(int i = 0; i < P; i++) {
             for(int j = 0; j < P; j++) {
                 ChunkPos cp = new ChunkPos(base.x + i, base.z + j);
-                String key = cp.x + ";" + cp.z + ";" + dim;
+                String key = makeChunkKey(cp, dim);
                 if (player.getUUID().equals(chunkOwners.get(key))) {
-                    chunkOwners.remove(key);
-                    chunkCustomNames.remove(key);
-                    deleteClaimFromDB(key);
-                    owned = true;
+                    keysToRemove.add(key);
                 }
             }
         }
-        if (owned) {
+        if (!keysToRemove.isEmpty()) {
+            String claimId = makePlotClaimId(plotX, plotZ, dim);
+            removeClaimMetadata(player.getUUID(), claimId);
+            for (String key : keysToRemove) {
+                chunkOwners.remove(key);
+                chunkCustomNames.remove(key);
+                deleteClaimFromDB(key);
+            }
             syncToClient(player);
             PlayerStatsManager.get().updateClaims(player.getUUID(), player.getGameProfile().getName(), getUsedPlots(player.getUUID()));
             player.sendSystemMessage(Component.literal(LanguageManager.get(lang, "msg.plot.abandoned")));
@@ -443,33 +589,34 @@ public class ClaimManager {
         return false;
     }
 
-    public boolean unclaimByName(ServerPlayer player, String claimName) {
+    public boolean unclaimById(ServerPlayer player, String claimId) {
         String lang = getPlayerLanguage(player.getUUID());
-        boolean removedAny = false;
-        List<String> keysToRemove = new ArrayList<>();
+        List<String> keysToRemove = getChunkKeysForClaimId(claimId, player.getUUID());
 
-        for (Map.Entry<String, UUID> entry : chunkOwners.entrySet()) {
-            if (entry.getValue().equals(player.getUUID())) {
-                String cName = chunkCustomNames.get(entry.getKey());
-                if (claimName.equals(cName)) {
-                    keysToRemove.add(entry.getKey());
-                }
-            }
-        }
+        if (keysToRemove.isEmpty()) return false;
 
+        String displayName = getClaimDisplayName(claimId);
+        removeClaimMetadata(player.getUUID(), claimId);
         for (String key : keysToRemove) {
             chunkOwners.remove(key);
             chunkCustomNames.remove(key);
             deleteClaimFromDB(key);
-            removedAny = true;
         }
 
-        if (removedAny) {
-            syncToClient(player);
-            int usedCount = ProtectionConfig.get().isPlotMode ? getUsedPlots(player.getUUID()) : getUsedSlots(player.getUUID());
-            PlayerStatsManager.get().updateClaims(player.getUUID(), player.getGameProfile().getName(), usedCount);
-            player.sendSystemMessage(Component.literal(LanguageManager.get(lang, "msg.claim.deleted", claimName)));
-            return true;
+        syncToClient(player);
+        PlayerStatsManager.get().updateClaims(player.getUUID(), player.getGameProfile().getName(), getUsedClaimCount(player.getUUID()));
+        player.sendSystemMessage(Component.literal(LanguageManager.get(lang, "msg.claim.deleted", displayName)));
+        return true;
+    }
+
+    public boolean unclaimByName(ServerPlayer player, String claimName) {
+        for (Map.Entry<String, UUID> entry : chunkOwners.entrySet()) {
+            if (entry.getValue().equals(player.getUUID())) {
+                String claimId = getClaimIdFromChunkKey(entry.getKey());
+                if (claimName.equals(getClaimDisplayName(claimId))) {
+                    return unclaimById(player, claimId);
+                }
+            }
         }
         return false;
     }
@@ -485,7 +632,7 @@ public class ClaimManager {
             return claimPlot(player, plotCoords[0], plotCoords[1], customName);
         }
 
-        String key = pos.x + ";" + pos.z + ";" + player.level().dimension().location().toString();
+        String key = makeChunkKey(pos, player.level().dimension().location().toString());
         if (chunkOwners.containsKey(key)) return false;
 
         if (getUsedSlots(player.getUUID()) < getMaxSlots(player.getUUID())) {
@@ -508,8 +655,10 @@ public class ClaimManager {
             return unclaimPlot(player, plotCoords[0], plotCoords[1]);
         }
 
-        String key = pos.x + ";" + pos.z + ";" + player.level().dimension().location().toString();
+        String dim = player.level().dimension().location().toString();
+        String key = makeChunkKey(pos, dim);
         if (player.getUUID().equals(chunkOwners.get(key))) {
+            removeClaimMetadata(player.getUUID(), getClaimId(pos, dim));
             chunkOwners.remove(key);
             chunkCustomNames.remove(key);
             deleteClaimFromDB(key);
@@ -585,7 +734,7 @@ public class ClaimManager {
 
         for (Map.Entry<String, UUID> entry : chunkOwners.entrySet()) {
             if (entry.getValue().equals(player.getUUID()) && entry.getKey().endsWith(dim)) {
-                String[] parts = entry.getKey().split(";");
+                String[] parts = entry.getKey().split(";", 3);
                 int cx = Integer.parseInt(parts[0]);
                 int cz = Integer.parseInt(parts[1]);
                 int[] plotCoords = getPlotCoordsFromChunk(new ChunkPos(cx, cz));
@@ -614,7 +763,7 @@ public class ClaimManager {
         List<BlockPos> locations = new ArrayList<>();
         for (Map.Entry<String, UUID> entry : chunkOwners.entrySet()) {
             if (entry.getValue().equals(uuid)) {
-                String[] parts = entry.getKey().split(";");
+                String[] parts = entry.getKey().split(";", 3);
                 int x = Integer.parseInt(parts[0]) << 4;
                 int z = Integer.parseInt(parts[1]) << 4;
                 locations.add(new BlockPos(x + 8, 100, z + 8));
@@ -636,13 +785,19 @@ public class ClaimManager {
     }
 
     public boolean removeAnyClaim(ChunkPos pos, String dim) {
-        String key = pos.x + ";" + pos.z + ";" + dim;
-        if (chunkOwners.containsKey(key)) {
-            UUID owner = chunkOwners.get(key);
-            chunkOwners.remove(key);
-            chunkCustomNames.remove(key);
-            deleteClaimFromDB(key);
-            PlayerStatsManager.get().updateClaims(owner, playerNames.getOrDefault(owner, "Necunoscut"), getUsedSlots(owner));
+        String key = makeChunkKey(pos, dim);
+        UUID owner = chunkOwners.get(key);
+        if (owner != null) {
+            String claimId = getClaimId(pos, dim);
+            List<String> keysToRemove = getChunkKeysForClaimId(claimId, owner);
+            removeClaimMetadata(owner, claimId);
+
+            for (String removeKey : keysToRemove) {
+                chunkOwners.remove(removeKey);
+                chunkCustomNames.remove(removeKey);
+                deleteClaimFromDB(removeKey);
+            }
+            PlayerStatsManager.get().updateClaims(owner, playerNames.getOrDefault(owner, "Necunoscut"), getUsedClaimCount(owner));
             return true;
         }
         return false;
@@ -661,22 +816,34 @@ public class ClaimManager {
                 saveClaim(chunkKey, toId, chunkCustomNames.getOrDefault(chunkKey, ""));
             }
         }
+        Map<String, Set<UUID>> fromTrusts = trustedPlayers.remove(fromId);
+        if (fromTrusts != null) {
+            trustedPlayers.computeIfAbsent(toId, k -> new HashMap<>()).putAll(fromTrusts);
+        }
+
+        Map<String, Map<String, Boolean>> fromFlags = claimFlags.remove(fromId);
+        if (fromFlags != null) {
+            claimFlags.computeIfAbsent(toId, k -> new HashMap<>()).putAll(fromFlags);
+            savePlayerFlags(fromId);
+            savePlayerFlags(toId);
+        }
+
         playerNames.put(toId, toName);
         savePlayerSettings(fromId);
         savePlayerSettings(toId);
 
         PlayerStatsManager.get().updateClaims(fromId, "Necunoscut", 0);
-        PlayerStatsManager.get().updateClaims(toId, toName, getUsedSlots(toId));
+        PlayerStatsManager.get().updateClaims(toId, toName, getUsedClaimCount(toId));
     }
 
     public void adminClaim(ChunkPos pos, String dim, String name) {
-        String key = pos.x + ";" + pos.z + ";" + dim;
-        UUID adminUUID = new UUID(0, 0);
-        chunkOwners.put(key, adminUUID);
-        playerNames.put(adminUUID, "§6" + name);
-        chunkCustomNames.put(key, "Zona Admin");
-        saveClaim(key, adminUUID, "Zona Admin");
-        savePlayerSettings(adminUUID);
+        String key = makeChunkKey(pos, dim);
+        String displayName = (name == null || name.trim().isEmpty()) ? "Zona Admin" : name.trim();
+        chunkOwners.put(key, ADMIN_UUID);
+        playerNames.put(ADMIN_UUID, "§6" + displayName);
+        chunkCustomNames.put(key, displayName);
+        saveClaim(key, ADMIN_UUID, displayName);
+        savePlayerSettings(ADMIN_UUID);
     }
 
     public double getNextSlotCost(UUID playerId) {
@@ -715,48 +882,61 @@ public class ClaimManager {
         return false;
     }
 
-    public void setFlag(UUID owner, String claimName, String flagName, boolean state) {
-        if (claimName == null || claimName.isEmpty()) return;
-        claimFlags.computeIfAbsent(owner, k -> new HashMap<>()).computeIfAbsent(claimName, k -> new HashMap<>()).put(flagName, state);
+    public boolean setFlag(UUID owner, String claimId, String flagName, boolean state) {
+        if (claimId == null || claimId.isEmpty() || !ownsClaim(owner, claimId)) return false;
+        Map<String, Map<String, Boolean>> ownerFlags = claimFlags.computeIfAbsent(owner, k -> new HashMap<>());
+        Map<String, Boolean> flags = ownerFlags.get(claimId);
+        if (flags == null) {
+            flags = new HashMap<>(getFlagsForClaim(owner, claimId));
+            ownerFlags.put(claimId, flags);
+        }
+        flags.put(flagName, state);
         savePlayerFlags(owner);
+        return true;
     }
 
-    public boolean getFlag(UUID owner, String claimName, String flagName) {
-        if (owner == null || claimName == null || claimName.isEmpty()) return false;
-        Map<String, Map<String, Boolean>> playerFlags = claimFlags.get(owner);
-        if (playerFlags != null && playerFlags.containsKey(claimName)) return playerFlags.get(claimName).getOrDefault(flagName, false);
-        return false;
+    public boolean getFlag(UUID owner, String claimId, String flagName) {
+        if (owner == null || claimId == null || claimId.isEmpty()) return false;
+        return getFlagsForClaim(owner, claimId).getOrDefault(flagName, false);
     }
 
-    public void addTrust(ServerPlayer owner, UUID target, String claimName) {
-        if (claimName == null || claimName.isEmpty()) return;
-        trustedPlayers.computeIfAbsent(owner.getUUID(), k -> new HashMap<>()).computeIfAbsent(claimName, k -> new HashSet<>()).add(target);
+    public boolean addTrust(ServerPlayer owner, UUID target, String claimId) {
+        if (claimId == null || claimId.isEmpty() || !ownsClaim(owner.getUUID(), claimId)) return false;
+        Map<String, Set<UUID>> ownerTrusts = trustedPlayers.computeIfAbsent(owner.getUUID(), k -> new HashMap<>());
+        Set<UUID> trusts = ownerTrusts.get(claimId);
+        if (trusts == null) {
+            trusts = new HashSet<>(getTrustedSet(owner.getUUID(), claimId));
+            ownerTrusts.put(claimId, trusts);
+        }
+        trusts.add(target);
         savePlayerSettings(owner.getUUID());
         syncToClient(owner);
+        return true;
     }
 
-    public void removeTrust(ServerPlayer owner, UUID target, String claimName) {
-        if (claimName == null || claimName.isEmpty()) return;
+    public boolean removeTrust(ServerPlayer owner, UUID target, String claimId) {
+        if (claimId == null || claimId.isEmpty() || !ownsClaim(owner.getUUID(), claimId)) return false;
         if (trustedPlayers.containsKey(owner.getUUID())) {
             Map<String, Set<UUID>> claimsTrusts = trustedPlayers.get(owner.getUUID());
-            if (claimsTrusts.containsKey(claimName)) {
-                claimsTrusts.get(claimName).remove(target);
+            String trustKey = claimsTrusts.containsKey(claimId) ? claimId : getClaimDisplayName(claimId);
+            if (claimsTrusts.containsKey(trustKey)) {
+                claimsTrusts.get(trustKey).remove(target);
                 savePlayerSettings(owner.getUUID());
                 syncToClient(owner);
+                return true;
             }
         }
+        return false;
     }
 
-    public boolean isTrusted(UUID owner, UUID visitor, String claimName) {
+    public boolean isTrusted(UUID owner, UUID visitor, String claimId) {
         if (owner == null || owner.equals(visitor)) return true;
-        if (claimName == null || claimName.isEmpty()) return false;
-        Map<String, Set<UUID>> claimsTrusts = trustedPlayers.get(owner);
-        if (claimsTrusts != null && claimsTrusts.containsKey(claimName)) return claimsTrusts.get(claimName).contains(visitor);
-        return false;
+        if (claimId == null || claimId.isEmpty()) return false;
+        return getTrustedSet(owner, claimId).contains(visitor);
     }
 
     public UUID getChunkOwner(ChunkPos pos, String dim) {
-        return chunkOwners.get(pos.x + ";" + pos.z + ";" + dim);
+        return chunkOwners.get(makeChunkKey(pos, dim));
     }
 
     public String getOwnerName(UUID uuid) {
@@ -766,7 +946,7 @@ public class ClaimManager {
     }
 
     public String getCustomName(ChunkPos pos, String dim) {
-        return chunkCustomNames.getOrDefault(pos.x + ";" + pos.z + ";" + dim, "");
+        return chunkCustomNames.getOrDefault(makeChunkKey(pos, dim), "");
     }
 
     public int getMaxSlots(UUID p) {
@@ -775,6 +955,11 @@ public class ClaimManager {
 
     public int getUsedSlots(UUID p) {
         return (int) chunkOwners.values().stream().filter(id -> id.equals(p)).count();
+    }
+
+    public int getUsedClaimCount(UUID p) {
+        if (ADMIN_UUID.equals(p)) return getUsedSlots(p);
+        return ProtectionConfig.get().isPlotMode ? getUsedPlots(p) : getUsedSlots(p);
     }
 
     public void syncToClient(ServerPlayer player) {
@@ -801,50 +986,41 @@ public class ClaimManager {
                 }
             }
 
-            Map<String, Map<UUID, String>> trustedNamesPerClaim = new HashMap<>();
-            Map<String, Set<UUID>> myTrusts = trustedPlayers.getOrDefault(player.getUUID(), new HashMap<>());
-
-            for (Map.Entry<String, Set<UUID>> entry : myTrusts.entrySet()) {
-                String cName = entry.getKey();
-                if (cName == null) continue;
-
-                Map<UUID, String> mappedNames = new HashMap<>();
-                if (entry.getValue() != null) {
-                    for (UUID id : entry.getValue()) {
-                        if (id != null && player.getServer() != null) {
-                            try {
-                                player.getServer().getProfileCache().get(id).ifPresent(pr -> mappedNames.put(id, pr.getName()));
-                            } catch (Exception ignored) { }
-                        }
-                    }
-                }
-                trustedNamesPerClaim.put(cName, mappedNames);
-            }
-
-            Set<String> allMyClaimNames = new HashSet<>();
-            UUID adminUUID = new UUID(0, 0);
+            Set<String> allMyClaimIds = new HashSet<>();
+            Map<String, String> claimDisplayNames = new HashMap<>();
+            UUID visibleOwner = isAdminMap ? ADMIN_UUID : player.getUUID();
 
             for (Map.Entry<String, UUID> entry : chunkOwners.entrySet()) {
                 if (entry.getValue() != null) {
-                    boolean isMine = entry.getValue().equals(player.getUUID());
-                    boolean isAdminClaim = entry.getValue().equals(adminUUID);
+                    boolean visibleClaim = entry.getValue().equals(visibleOwner);
 
-                    if (isMine || (isAdminMap && isAdminClaim)) {
-                        String cName = chunkCustomNames.get(entry.getKey());
-                        if (cName != null && !cName.trim().isEmpty()) {
-                            allMyClaimNames.add(cName);
-                        }
+                    if (visibleClaim) {
+                        String claimId = getClaimIdFromChunkKey(entry.getKey());
+                        allMyClaimIds.add(claimId);
+                        claimDisplayNames.put(claimId, getClaimDisplayName(claimId));
                     }
                 }
             }
 
-            Map<String, Map<String, Boolean>> myFlagsMap = new HashMap<>(claimFlags.getOrDefault(player.getUUID(), new HashMap<>()));
-            if (isAdminMap) {
-                Map<String, Map<String, Boolean>> adminFlags = claimFlags.getOrDefault(adminUUID, new HashMap<>());
-                myFlagsMap.putAll(adminFlags);
+            Map<String, Map<UUID, String>> trustedNamesPerClaim = new HashMap<>();
+            for (String claimId : allMyClaimIds) {
+                Map<UUID, String> mappedNames = new HashMap<>();
+                for (UUID id : getTrustedSet(player.getUUID(), claimId)) {
+                    if (id != null && player.getServer() != null) {
+                        try {
+                            player.getServer().getProfileCache().get(id).ifPresent(pr -> mappedNames.put(id, pr.getName()));
+                        } catch (Exception ignored) { }
+                    }
+                }
+                trustedNamesPerClaim.put(claimId, mappedNames);
             }
 
-            SyncData data = new SyncData(localClaims, trustedNamesPerClaim, myFlagsMap, allMyClaimNames, getMaxSlots(player.getUUID()), getUsedPlots(player.getUUID()), getNextSlotCost(player.getUUID()));
+            Map<String, Map<String, Boolean>> myFlagsMap = new HashMap<>();
+            for (String claimId : allMyClaimIds) {
+                myFlagsMap.put(claimId, new HashMap<>(getFlagsForClaim(visibleOwner, claimId)));
+            }
+
+            SyncData data = new SyncData(localClaims, trustedNamesPerClaim, myFlagsMap, allMyClaimIds, claimDisplayNames, getMaxSlots(player.getUUID()), getUsedClaimCount(player.getUUID()), getNextSlotCost(player.getUUID()));
             PacketHandler.sendToPlayer(new PacketHandler.S2C_SyncClaimData(GSON.toJson(data), isAdminMap), player);
         } catch (Exception e) {
             e.printStackTrace();
@@ -857,14 +1033,16 @@ public class ClaimManager {
         public Map<String, Map<UUID, String>> trustedPerClaim;
         public Map<String, Map<String, Boolean>> myFlags;
         public Set<String> allClaimNames;
+        public Map<String, String> claimDisplayNames;
         public int maxSlots, usedSlots;
         public double nextSlotCost;
 
-        public SyncData(Map<String, ClientClaimInfo> m, Map<String, Map<UUID, String>> t, Map<String, Map<String, Boolean>> flags, Set<String> names, int max, int used, double cost) {
+        public SyncData(Map<String, ClientClaimInfo> m, Map<String, Map<UUID, String>> t, Map<String, Map<String, Boolean>> flags, Set<String> names, Map<String, String> displayNames, int max, int used, double cost) {
             this.map = m;
             this.trustedPerClaim = t;
             this.myFlags = flags;
             this.allClaimNames = names;
+            this.claimDisplayNames = displayNames;
             this.maxSlots = max;
             this.usedSlots = used;
             this.nextSlotCost = cost;
@@ -882,5 +1060,13 @@ public class ClaimManager {
         }
     }
 
-    public void save() { }
+    public void save() {
+        try {
+            Future<?> flush = dbExecutor.submit(() -> { });
+            flush.get(10, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            System.err.println("[EvoProtection] Timed out while flushing queued database writes.");
+            e.printStackTrace();
+        }
+    }
 }

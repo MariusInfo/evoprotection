@@ -11,25 +11,32 @@ import java.util.*;
 public class FlagScreen extends Screen {
     private final Screen parent;
     private final Map<String, Map<String, Boolean>> myFlags;
-    private final List<String> myClaimNames;
+    private final List<String> myClaimIds;
+    private final Map<String, String> claimDisplayNames;
 
     private int currentClaimIndex = 0;
     private final int imageWidth = 320;
     private final int imageHeight = 285;
     private final List<CustomButton> buttons = new ArrayList<>();
 
-    public FlagScreen(Screen parent, Map<String, Map<String, Boolean>> flags, Set<String> allClaimNames) {
+    public FlagScreen(Screen parent, Map<String, Map<String, Boolean>> flags, Set<String> allClaimNames, Map<String, String> claimDisplayNames) {
         super(Component.literal("Flags Manager"));
         this.parent = parent;
         this.myFlags = flags;
-        this.myClaimNames = new ArrayList<>(allClaimNames);
-        Collections.sort(this.myClaimNames);
+        this.myClaimIds = new ArrayList<>(allClaimNames);
+        this.claimDisplayNames = new HashMap<>(claimDisplayNames != null ? claimDisplayNames : new HashMap<>());
+        sortClaims();
     }
 
     public void updateData(String json) {
         org.evocraft.evoprotection.manager.ClaimManager.SyncData data = new com.google.gson.Gson().fromJson(json, org.evocraft.evoprotection.manager.ClaimManager.SyncData.class);
         this.myFlags.clear();
         if (data.myFlags != null) this.myFlags.putAll(data.myFlags);
+        this.myClaimIds.clear();
+        if (data.allClaimNames != null) this.myClaimIds.addAll(data.allClaimNames);
+        this.claimDisplayNames.clear();
+        if (data.claimDisplayNames != null) this.claimDisplayNames.putAll(data.claimDisplayNames);
+        sortClaims();
 
         if (this.parent instanceof ClaimMapScreen cms) {
             cms.updateData(json);
@@ -37,6 +44,17 @@ public class FlagScreen extends Screen {
             acms.updateData(json);
         }
         this.init();
+    }
+
+    private void sortClaims() {
+        this.myClaimIds.sort(Comparator.comparing(this::getDisplayName).thenComparing(id -> id));
+        if (currentClaimIndex >= myClaimIds.size()) {
+            currentClaimIndex = Math.max(0, myClaimIds.size() - 1);
+        }
+    }
+
+    private String getDisplayName(String claimId) {
+        return claimDisplayNames.getOrDefault(claimId, claimId);
     }
 
     private float getScale() {
@@ -71,13 +89,13 @@ public class FlagScreen extends Screen {
 
         buttons.add(new CustomButton(LanguageManager.get("gui.button.back"), x + 10, y + imageHeight - 30, 120, 20, () -> this.minecraft.setScreen(parent)));
 
-        if (myClaimNames.isEmpty()) return;
+        if (myClaimIds.isEmpty()) return;
 
         buttons.add(new CustomButton("<", x + 20, y + 35, 20, 20, () -> {
             if (currentClaimIndex > 0) { currentClaimIndex--; this.init(); }
         }));
         buttons.add(new CustomButton(">", x + 280, y + 35, 20, 20, () -> {
-            if (currentClaimIndex < myClaimNames.size() - 1) { currentClaimIndex++; this.init(); }
+            if (currentClaimIndex < myClaimIds.size() - 1) { currentClaimIndex++; this.init(); }
         }));
 
         int startY = y + 70;
@@ -102,19 +120,19 @@ public class FlagScreen extends Screen {
     }
 
     private String getStatus(String flag) {
-        if (myClaimNames.isEmpty()) return LanguageManager.get("gui.status.off");
-        String currentClaim = myClaimNames.get(currentClaimIndex);
-        boolean status = myFlags.getOrDefault(currentClaim, new HashMap<>()).getOrDefault(flag, false);
+        if (myClaimIds.isEmpty()) return LanguageManager.get("gui.status.off");
+        String currentClaimId = myClaimIds.get(currentClaimIndex);
+        boolean status = myFlags.getOrDefault(currentClaimId, new HashMap<>()).getOrDefault(flag, false);
         return status ? LanguageManager.get("gui.status.on") : LanguageManager.get("gui.status.off");
     }
 
     private void toggleFlag(String flag) {
-        if (myClaimNames.isEmpty()) return;
-        String currentClaim = myClaimNames.get(currentClaimIndex);
-        boolean currentState = myFlags.getOrDefault(currentClaim, new HashMap<>()).getOrDefault(flag, false);
+        if (myClaimIds.isEmpty()) return;
+        String currentClaimId = myClaimIds.get(currentClaimIndex);
+        boolean currentState = myFlags.getOrDefault(currentClaimId, new HashMap<>()).getOrDefault(flag, false);
         boolean isAdminMode = (this.parent instanceof AdminClaimMapScreen);
 
-        PacketHandler.INSTANCE.sendToServer(new PacketHandler.C2S_UpdateFlag(currentClaim, flag, !currentState, isAdminMode));
+        PacketHandler.INSTANCE.sendToServer(new PacketHandler.C2S_UpdateFlag(currentClaimId, flag, !currentState, isAdminMode));
     }
 
     @Override
@@ -137,11 +155,11 @@ public class FlagScreen extends Screen {
         g.drawCenteredString(this.font, LanguageManager.get("gui.flags.title"), sw/2, y + 12, 0xFF55B783);
         g.fill(x, y + 28, x + imageWidth, y + 29, 0xFF2D5947);
 
-        if (myClaimNames.isEmpty()) {
+        if (myClaimIds.isEmpty()) {
             g.drawCenteredString(this.font, LanguageManager.get("gui.trust.no_claim"), sw/2, y + 100, 0xFFFFFF);
         } else {
-            String currentClaim = myClaimNames.get(currentClaimIndex);
-            g.drawCenteredString(this.font, LanguageManager.get("gui.flags.desc1") + currentClaim, sw/2, y + 40, 0xFFFFFF);
+            String currentClaimId = myClaimIds.get(currentClaimIndex);
+            g.drawCenteredString(this.font, LanguageManager.get("gui.flags.desc1") + getDisplayName(currentClaimId), sw/2, y + 40, 0xFFFFFF);
             g.drawCenteredString(this.font, LanguageManager.get("gui.flags.desc2"), sw/2, y + imageHeight - 55, 0xAAAAAA);
         }
 

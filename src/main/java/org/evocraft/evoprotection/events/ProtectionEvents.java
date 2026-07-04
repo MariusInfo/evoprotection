@@ -81,8 +81,8 @@ public class ProtectionEvents {
         if (owner == null) return true; // Can use in wilderness
         if (owner.equals(player.getUUID())) return true; // Can use in own claim
 
-        String claimName = ClaimManager.get().getCustomName(targetChunk, dim);
-        return ClaimManager.get().isTrusted(owner, player.getUUID(), claimName);
+        String claimId = ClaimManager.get().getClaimId(targetChunk, dim);
+        return ClaimManager.get().isTrusted(owner, player.getUUID(), claimId);
     }
 
     private static boolean canUseMowzieItem(ServerPlayer player) {
@@ -243,8 +243,8 @@ public class ProtectionEvents {
                     if (attackerZoneOwner.getMostSignificantBits() == 0 && attackerZoneOwner.getLeastSignificantBits() == 0) {
                         event.setCanceled(true); sendMsg(attacker); return;
                     }
-                    String claimName = ClaimManager.get().getCustomName(attackerChunk, dim);
-                    if (!ClaimManager.get().getFlag(attackerZoneOwner, claimName, "pvp")) {
+                    String claimId = ClaimManager.get().getClaimId(attackerChunk, dim);
+                    if (!ClaimManager.get().getFlag(attackerZoneOwner, claimId, "pvp")) {
                         event.setCanceled(true);
                         attacker.displayClientMessage(Component.literal("§c[!] PVP is disabled in the area you are attacking from!"), true);
                         return;
@@ -255,8 +255,8 @@ public class ProtectionEvents {
                     if (targetZoneOwner.getMostSignificantBits() == 0 && targetZoneOwner.getLeastSignificantBits() == 0) {
                         event.setCanceled(true); sendMsg(attacker); return;
                     }
-                    String claimName = ClaimManager.get().getCustomName(targetChunk, dim);
-                    if (!ClaimManager.get().getFlag(targetZoneOwner, claimName, "pvp")) {
+                    String claimId = ClaimManager.get().getClaimId(targetChunk, dim);
+                    if (!ClaimManager.get().getFlag(targetZoneOwner, claimId, "pvp")) {
                         event.setCanceled(true);
                         attacker.displayClientMessage(Component.literal("§c[!] PVP is disabled in that protection!"), true);
                         return;
@@ -269,16 +269,16 @@ public class ProtectionEvents {
             UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dim);
 
             if (owner != null && !owner.equals(attacker.getUUID()) && !attacker.hasPermissions(2)) {
-                String claimName = ClaimManager.get().getCustomName(chunkPos, dim);
-                if (!ClaimManager.get().isTrusted(owner, attacker.getUUID(), claimName)) {
+                String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
+                if (!ClaimManager.get().isTrusted(owner, attacker.getUUID(), claimId)) {
 
                     if (target instanceof net.minecraft.world.entity.animal.Animal) {
-                        if (!ClaimManager.get().getFlag(owner, claimName, "hurt_animals")) {
+                        if (!ClaimManager.get().getFlag(owner, claimId, "hurt_animals")) {
                             event.setCanceled(true);
                             sendMsg(attacker);
                         }
                     } else if (!(target instanceof Monster)) {
-                        if (!ClaimManager.get().getFlag(owner, claimName, "public_build")) {
+                        if (!ClaimManager.get().getFlag(owner, claimId, "public_build")) {
                             event.setCanceled(true);
                             sendMsg(attacker);
                         }
@@ -305,8 +305,8 @@ public class ProtectionEvents {
                     if (attackerZoneOwner.getMostSignificantBits() == 0 && attackerZoneOwner.getLeastSignificantBits() == 0) {
                         event.setCanceled(true); return;
                     }
-                    String claimName = ClaimManager.get().getCustomName(attackerChunk, dim);
-                    if (!ClaimManager.get().getFlag(attackerZoneOwner, claimName, "pvp")) {
+                    String claimId = ClaimManager.get().getClaimId(attackerChunk, dim);
+                    if (!ClaimManager.get().getFlag(attackerZoneOwner, claimId, "pvp")) {
                         event.setCanceled(true);
                         return;
                     }
@@ -316,8 +316,8 @@ public class ProtectionEvents {
                     if (targetZoneOwner.getMostSignificantBits() == 0 && targetZoneOwner.getLeastSignificantBits() == 0) {
                         event.setCanceled(true); return;
                     }
-                    String claimName = ClaimManager.get().getCustomName(targetChunk, dim);
-                    if (!ClaimManager.get().getFlag(targetZoneOwner, claimName, "pvp")) {
+                    String claimId = ClaimManager.get().getClaimId(targetChunk, dim);
+                    if (!ClaimManager.get().getFlag(targetZoneOwner, claimId, "pvp")) {
                         event.setCanceled(true);
                         return;
                     }
@@ -434,7 +434,7 @@ public class ProtectionEvents {
                 return;
             }
 
-            String claimName = ClaimManager.get().getCustomName(pos, dim);
+            String claimId = ClaimManager.get().getClaimId(pos, dim);
             net.minecraft.world.entity.MobSpawnType spawnType = event.getSpawnType();
 
             // Always allow Breeding, Spawn Eggs, Buckets, and Commands to not block manual interaction
@@ -451,24 +451,24 @@ public class ProtectionEvents {
 
             if (isMonster) {
                 if (isSpawner) {
-                    if (!ClaimManager.get().getFlag(owner, claimName, "spawner_monsters")) {
+                    if (!ClaimManager.get().getFlag(owner, claimId, "spawner_monsters")) {
                         event.setResult(Event.Result.DENY);
                         event.setCanceled(true);
                     }
                 } else {
-                    if (!ClaimManager.get().getFlag(owner, claimName, "natural_monsters")) {
+                    if (!ClaimManager.get().getFlag(owner, claimId, "natural_monsters")) {
                         event.setResult(Event.Result.DENY);
                         event.setCanceled(true);
                     }
                 }
             } else if (isAnimal) {
                 if (isSpawner) {
-                    if (!ClaimManager.get().getFlag(owner, claimName, "spawner_animals")) {
+                    if (!ClaimManager.get().getFlag(owner, claimId, "spawner_animals")) {
                         event.setResult(Event.Result.DENY);
                         event.setCanceled(true);
                     }
                 } else {
-                    if (!ClaimManager.get().getFlag(owner, claimName, "natural_animals")) {
+                    if (!ClaimManager.get().getFlag(owner, claimId, "natural_animals")) {
                         event.setResult(Event.Result.DENY);
                         event.setCanceled(true);
                     }
@@ -486,9 +486,9 @@ public class ProtectionEvents {
             UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dim);
 
             if (owner != null && !owner.equals(player.getUUID()) && !player.hasPermissions(2)) {
-                String claimName = ClaimManager.get().getCustomName(chunkPos, dim);
-                if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimName)) {
-                    if (!ClaimManager.get().getFlag(owner, claimName, "item_pickup")) {
+                String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
+                if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) {
+                    if (!ClaimManager.get().getFlag(owner, claimId, "item_pickup")) {
                         event.setCanceled(true);
                     }
                 }
@@ -527,8 +527,8 @@ public class ProtectionEvents {
             UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dim);
             if (owner != null) {
                 if (owner.getMostSignificantBits() == 0 && owner.getLeastSignificantBits() == 0) return true;
-                String claimName = ClaimManager.get().getCustomName(chunkPos, dim);
-                return !ClaimManager.get().getFlag(owner, claimName, "explosions");
+                String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
+                return !ClaimManager.get().getFlag(owner, claimId, "explosions");
             }
             return false;
         });
@@ -540,8 +540,8 @@ public class ProtectionEvents {
             UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dim);
             if (owner != null) {
                 if (owner.getMostSignificantBits() == 0 && owner.getLeastSignificantBits() == 0) return true;
-                String claimName = ClaimManager.get().getCustomName(chunkPos, dim);
-                return !ClaimManager.get().getFlag(owner, claimName, "explosions");
+                String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
+                return !ClaimManager.get().getFlag(owner, claimId, "explosions");
             }
             return false;
         });
@@ -648,12 +648,12 @@ public class ProtectionEvents {
             }
 
             if (owner != null && !owner.equals(player.getUUID()) && !player.hasPermissions(2)) {
-                String claimName = ClaimManager.get().getCustomName(chunkPos, dim);
-                if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimName)) {
+                String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
+                if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) {
 
                     boolean isCarryOnAttempt = player.isCrouching() && player.getMainHandItem().isEmpty() && player.getOffhandItem().isEmpty();
                     if (isCarryOnAttempt) {
-                        if (!ClaimManager.get().getFlag(owner, claimName, "carry_on")) {
+                        if (!ClaimManager.get().getFlag(owner, claimId, "carry_on")) {
                             event.setCanceled(true);
                             event.setUseBlock(Event.Result.DENY);
                             event.setUseItem(Event.Result.DENY);
@@ -717,20 +717,20 @@ public class ProtectionEvents {
             }
 
             if (owner != null && !owner.equals(player.getUUID()) && !player.hasPermissions(2)) {
-                String claimName = ClaimManager.get().getCustomName(chunkPos, dim);
-                if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimName)) {
-                    if (ClaimManager.get().getFlag(owner, claimName, "public_build")) return;
+                String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
+                if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) {
+                    if (ClaimManager.get().getFlag(owner, claimId, "public_build")) return;
 
                     boolean isCarryOnAttempt = player.isCrouching() && player.getMainHandItem().isEmpty() && player.getOffhandItem().isEmpty();
                     if (isCarryOnAttempt) {
-                        if (!ClaimManager.get().getFlag(owner, claimName, "carry_on")) {
+                        if (!ClaimManager.get().getFlag(owner, claimId, "carry_on")) {
                             event.setCanceled(true);
                             sendMsg(player, "§c[!] You do not have permission to use Carry On here!");
                             return;
                         }
                     }
 
-                    if (!ClaimManager.get().getFlag(owner, claimName, "interact_entities")) {
+                    if (!ClaimManager.get().getFlag(owner, claimId, "interact_entities")) {
                         event.setCanceled(true);
                         sendMsg(player);
                     }
@@ -757,20 +757,20 @@ public class ProtectionEvents {
             }
 
             if (owner != null && !owner.equals(player.getUUID()) && !player.hasPermissions(2)) {
-                String claimName = ClaimManager.get().getCustomName(chunkPos, dim);
-                if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimName)) {
-                    if (ClaimManager.get().getFlag(owner, claimName, "public_build")) return;
+                String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
+                if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) {
+                    if (ClaimManager.get().getFlag(owner, claimId, "public_build")) return;
 
                     boolean isCarryOnAttempt = player.isCrouching() && player.getMainHandItem().isEmpty() && player.getOffhandItem().isEmpty();
                     if (isCarryOnAttempt) {
-                        if (!ClaimManager.get().getFlag(owner, claimName, "carry_on")) {
+                        if (!ClaimManager.get().getFlag(owner, claimId, "carry_on")) {
                             event.setCanceled(true);
                             sendMsg(player, "§c[!] You do not have permission to use Carry On here!");
                             return;
                         }
                     }
 
-                    if (!ClaimManager.get().getFlag(owner, claimName, "interact_entities")) {
+                    if (!ClaimManager.get().getFlag(owner, claimId, "interact_entities")) {
                         event.setCanceled(true);
                         sendMsg(player);
                     }
@@ -831,10 +831,10 @@ public class ProtectionEvents {
             return isRightClick;
         }
 
-        String claimName = ClaimManager.get().getCustomName(chunkPos, dim);
-        if (ClaimManager.get().isTrusted(owner, player.getUUID(), claimName)) return true;
+        String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
+        if (ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) return true;
 
-        if (ClaimManager.get().getFlag(owner, claimName, "public_build")) return true;
+        if (ClaimManager.get().getFlag(owner, claimId, "public_build")) return true;
 
         if (isRightClick && state != null) {
             Block block = state.getBlock();
@@ -844,10 +844,10 @@ public class ProtectionEvents {
                     block instanceof net.minecraft.world.level.block.FenceGateBlock ||
                     block instanceof net.minecraft.world.level.block.ButtonBlock ||
                     block instanceof net.minecraft.world.level.block.LeverBlock;
-            if (isDoor && ClaimManager.get().getFlag(owner, claimName, "doors")) return true;
+            if (isDoor && ClaimManager.get().getFlag(owner, claimId, "doors")) return true;
 
             boolean isContainer = state.hasBlockEntity() || block instanceof net.minecraft.world.level.block.AbstractChestBlock;
-            if (isContainer && ClaimManager.get().getFlag(owner, claimName, "chests")) return true;
+            if (isContainer && ClaimManager.get().getFlag(owner, claimId, "chests")) return true;
 
             boolean isUse = block instanceof net.minecraft.world.level.block.CraftingTableBlock ||
                     block instanceof net.minecraft.world.level.block.AnvilBlock ||
@@ -858,7 +858,7 @@ public class ProtectionEvents {
                     block instanceof net.minecraft.world.level.block.GrindstoneBlock ||
                     block instanceof net.minecraft.world.level.block.BedBlock ||
                     block instanceof net.minecraft.world.level.block.BellBlock;
-            if (isUse && ClaimManager.get().getFlag(owner, claimName, "use")) return true;
+            if (isUse && ClaimManager.get().getFlag(owner, claimId, "use")) return true;
         }
 
         return false;

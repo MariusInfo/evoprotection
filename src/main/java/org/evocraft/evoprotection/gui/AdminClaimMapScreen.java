@@ -96,7 +96,7 @@ public class AdminClaimMapScreen extends Screen {
         this.addRenderableWidget(nameField);
 
         buttons.add(new CustomButton(LanguageManager.get("gui.button.settings"), finalX + 30, finalY + targetH - 35, 120, 20, () -> {
-            if (cachedData != null) this.minecraft.setScreen(new FlagScreen(this, cachedData.myFlags, cachedData.allClaimNames));
+            if (cachedData != null) this.minecraft.setScreen(new FlagScreen(this, cachedData.myFlags, cachedData.allClaimNames, cachedData.claimDisplayNames));
         }));
 
         // The language change button was removed as requested
