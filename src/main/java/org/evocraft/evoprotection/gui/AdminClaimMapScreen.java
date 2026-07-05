@@ -18,6 +18,7 @@ import org.evocraft.evoprotection.network.PacketHandler;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 public class AdminClaimMapScreen extends Screen {
     private static final int BORDER_COLOR = 0xFFFF3333;
@@ -92,13 +93,14 @@ public class AdminClaimMapScreen extends Screen {
 
         nameField = new EditBox(this.font, finalX + 30, finalY + targetH - 60, 180, 20, Component.literal(LanguageManager.get("gui.admin.name")));
         nameField.setMaxLength(25);
-        nameField.setValue("ADMIN");
-        nameField.active = false;
         nameField.visible = false;
         this.addRenderableWidget(nameField);
 
         buttons.add(new CustomButton(LanguageManager.get("gui.button.settings"), finalX + 30, finalY + targetH - 35, 120, 20, () -> {
-            if (cachedData != null) this.minecraft.setScreen(new FlagScreen(this, cachedData.myFlags, cachedData.allClaimNames, cachedData.claimDisplayNames));
+            if (cachedData != null) {
+                Set<String> flagClaims = cachedData.flagClaimNames != null ? cachedData.flagClaimNames : cachedData.allClaimNames;
+                this.minecraft.setScreen(new FlagScreen(this, cachedData.myFlags, flagClaims, cachedData.claimDisplayNames));
+            }
         }));
 
         // The language change button was removed as requested
@@ -192,7 +194,7 @@ public class AdminClaimMapScreen extends Screen {
         g.fill(x, y + 28, x + w, y + 29, 0xFF7A1C1C);
 
         boolean isAnimDone = currentW > targetW - 10;
-        if (nameField != null) nameField.visible = false;
+        if (nameField != null) nameField.visible = isAnimDone;
 
         if (isAnimDone) {
             int mapX = x + targetW - this.mapSize - 20;
@@ -292,7 +294,12 @@ public class AdminClaimMapScreen extends Screen {
 
                         ClaimManager.ClientClaimInfo info = cachedData != null ? cachedData.map.get(key) : null;
                         if (info == null) {
-                            PacketHandler.INSTANCE.sendToServer(new PacketHandler.C2S_AdminClaimAction(rChunkX, rChunkZ, true, "ADMIN"));
+                            String claimName = nameField != null ? nameField.getValue().trim() : "";
+                            if (claimName.isEmpty() || claimName.equals(LanguageManager.get("gui.admin.name"))) {
+                                showMsg(LanguageManager.get("gui.map.name_req"), 0xFFFF5555, 80);
+                                return true;
+                            }
+                            PacketHandler.INSTANCE.sendToServer(new PacketHandler.C2S_AdminClaimAction(rChunkX, rChunkZ, true, claimName));
                         } else {
                             PacketHandler.INSTANCE.sendToServer(new PacketHandler.C2S_AdminClaimAction(rChunkX, rChunkZ, false, ""));
                         }

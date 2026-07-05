@@ -19,6 +19,7 @@ import org.evocraft.evoprotection.network.PacketHandler;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 public class ClaimMapScreen extends Screen {
 
@@ -132,7 +133,10 @@ public class ClaimMapScreen extends Screen {
                 if (cachedData != null) this.minecraft.setScreen(new TrustScreen(this, cachedData.trustedPerClaim, cachedData.trustedRolesPerClaim, cachedData.allClaimNames, cachedData.claimDisplayNames));
             }));
             buttons.add(new CustomButton(LanguageManager.get("gui.button.settings"), finalX + 335, finalY + targetH - 30, 75, 20, () -> {
-                if (cachedData != null) this.minecraft.setScreen(new FlagScreen(this, cachedData.myFlags, cachedData.allClaimNames, cachedData.claimDisplayNames));
+                if (cachedData != null) {
+                    Set<String> flagClaims = cachedData.flagClaimNames != null ? cachedData.flagClaimNames : cachedData.allClaimNames;
+                    this.minecraft.setScreen(new FlagScreen(this, cachedData.myFlags, flagClaims, cachedData.claimDisplayNames));
+                }
             }));
             buttons.add(new CustomButton(LanguageManager.get("gui.button.delete"), finalX + 415, finalY + targetH - 30, 70, 20, () -> {
                 if (cachedData != null) this.minecraft.setScreen(new DeleteClaimScreen(this, cachedData.allClaimNames, cachedData.claimDisplayNames));

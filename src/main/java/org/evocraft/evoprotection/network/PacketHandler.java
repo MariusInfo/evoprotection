@@ -303,7 +303,12 @@ public class PacketHandler {
                     boolean adminAction = isAdmin && player.hasPermissions(2);
                     if (isAdmin && !adminAction) return;
 
-                    UUID targetUUID = adminAction ? new UUID(0, 0) : player.getUUID();
+                    UUID targetUUID = adminAction ? new UUID(0, 0) : ClaimManager.get().getClaimOwner(claimName);
+                    if (targetUUID == null) return;
+                    if (!adminAction && !ClaimManager.get().canEditFlag(targetUUID, player.getUUID(), claimName, flagName)) {
+                        player.sendSystemMessage(Component.literal("§cNu ai permisiunea sa schimbi acest flag pentru rolul tau."));
+                        return;
+                    }
                     if (!ClaimManager.get().setFlag(targetUUID, claimName, flagName, state)) return;
                     if (ClaimEnvironmentManager.isEnvironmentFlag(flagName)) {
                         ClaimEnvironmentManager.get().refreshClaimPlayers(player.getServer(), targetUUID, claimName);

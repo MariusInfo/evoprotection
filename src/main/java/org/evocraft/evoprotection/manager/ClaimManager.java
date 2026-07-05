@@ -135,10 +135,10 @@ public class ClaimManager {
         if (claimId == null || claimId.isEmpty()) return "";
 
         for (String key : getChunkKeysForClaimId(claimId, null)) {
-            if (ADMIN_UUID.equals(chunkOwners.get(key))) return ADMIN_CLAIM_NAME;
-
             String name = chunkCustomNames.get(key);
             if (name != null && !name.trim().isEmpty()) return name;
+
+            if (ADMIN_UUID.equals(chunkOwners.get(key))) return ADMIN_CLAIM_NAME;
         }
 
         String[] parts = claimId.split(";", 4);
@@ -165,7 +165,37 @@ public class ClaimManager {
     }
 
     public static String[] getAvailableTrustRoles() {
-        return new String[]{ROLE_COOWNER, ROLE_ADMIN, ROLE_FRIEND, ROLE_VISITOR};
+        return new String[]{ROLE_COOWNER, ROLE_ADMIN, ROLE_FRIEND};
+    }
+
+    public static boolean roleCanEditFlag(String role, String flagName) {
+        if (role == null) return false;
+        String normalizedRole = normalizeTrustRole(role);
+        String normalizedFlag = normalizeFlagName(flagName);
+
+        if (ROLE_COOWNER.equals(normalizedRole)) return true;
+
+        if (ROLE_ADMIN.equals(normalizedRole)) {
+            return !Set.of(
+                    "explosions",
+                    "pvp",
+                    "doors",
+                    "interact_entities",
+                    "carry_on"
+            ).contains(normalizedFlag);
+        }
+
+        if (ROLE_FRIEND.equals(normalizedRole)) {
+            return Set.of("spawner_animals", "spawner_monsters").contains(normalizedFlag);
+        }
+
+        return false;
+    }
+
+    public static boolean roleCanEditAnyFlag(String role) {
+        if (role == null) return false;
+        String normalizedRole = normalizeTrustRole(role);
+        return ROLE_COOWNER.equals(normalizedRole) || ROLE_ADMIN.equals(normalizedRole) || ROLE_FRIEND.equals(normalizedRole);
     }
 
     public static String normalizeFlagName(String flagName) {
@@ -223,7 +253,26 @@ public class ClaimManager {
     public String getTrustRole(UUID owner, UUID visitor, String claimId) {
         if (owner == null || visitor == null || claimId == null || claimId.isEmpty()) return ROLE_VISITOR;
         if (owner.equals(visitor)) return ROLE_COOWNER;
-        return normalizeTrustRole(getTrustRoles(owner, claimId).get(visitor));
+        String role = getTrustRoles(owner, claimId).get(visitor);
+        return role == null ? ROLE_VISITOR : normalizeTrustRole(role);
+    }
+
+    public boolean canEditFlag(UUID owner, UUID actor, String claimId, String flagName) {
+        if (owner == null || actor == null || claimId == null || claimId.isEmpty()) return false;
+        if (!ownsClaim(owner, claimId)) return false;
+        if (owner.equals(actor)) return true;
+        return roleCanEditFlag(getTrustRole(owner, actor, claimId), flagName);
+    }
+
+    public UUID getClaimOwner(String claimId) {
+        if (claimId == null || claimId.isEmpty()) return null;
+
+        for (Map.Entry<String, UUID> entry : chunkOwners.entrySet()) {
+            if (claimIdMatchesChunkKey(claimId, entry.getKey())) {
+                return entry.getValue();
+            }
+        }
+        return null;
     }
 
     private String getFlagStorageKey(UUID owner, String claimId) {
@@ -1009,10 +1058,11 @@ public class ClaimManager {
 
     public void adminClaim(ChunkPos pos, String dim, String name) {
         String key = makeChunkKey(pos, dim);
+        String displayTitle = (name == null || name.trim().isEmpty()) ? ADMIN_CLAIM_NAME : name.trim();
         chunkOwners.put(key, ADMIN_UUID);
         playerNames.put(ADMIN_UUID, "§6" + ADMIN_CLAIM_NAME);
-        chunkCustomNames.put(key, ADMIN_CLAIM_NAME);
-        saveClaim(key, ADMIN_UUID, ADMIN_CLAIM_NAME);
+        chunkCustomNames.put(key, displayTitle);
+        saveClaim(key, ADMIN_UUID, displayTitle);
         savePlayerSettings(ADMIN_UUID);
     }
 
@@ -1148,8 +1198,18 @@ public class ClaimManager {
 
     public String getCustomName(ChunkPos pos, String dim) {
         String key = makeChunkKey(pos, dim);
-        if (ADMIN_UUID.equals(chunkOwners.get(key))) return ADMIN_CLAIM_NAME;
         return chunkCustomNames.getOrDefault(key, "");
+    }
+
+    public String getClaimEnterName(ChunkPos pos, String dim) {
+        UUID owner = getChunkOwner(pos, dim);
+        if (owner == null) return getOwnerName(null);
+
+        String customName = getCustomName(pos, dim);
+        if (ADMIN_UUID.equals(owner) && customName != null && !customName.trim().isEmpty()) {
+            return customName.trim();
+        }
+        return getOwnerName(owner);
     }
 
     public int getMaxSlots(UUID p) {
@@ -1190,17 +1250,25 @@ public class ClaimManager {
             }
 
             Set<String> allMyClaimIds = new HashSet<>();
+            Set<String> flagClaimIds = new HashSet<>();
             Map<String, String> claimDisplayNames = new HashMap<>();
             UUID visibleOwner = isAdminMap ? ADMIN_UUID : player.getUUID();
 
             for (Map.Entry<String, UUID> entry : chunkOwners.entrySet()) {
                 if (entry.getValue() != null) {
                     boolean visibleClaim = entry.getValue().equals(visibleOwner);
+                    String claimId = getClaimIdFromChunkKey(entry.getKey());
 
                     if (visibleClaim) {
-                        String claimId = getClaimIdFromChunkKey(entry.getKey());
                         allMyClaimIds.add(claimId);
+                        flagClaimIds.add(claimId);
                         claimDisplayNames.put(claimId, getClaimDisplayName(claimId));
+                    } else if (!isAdminMap) {
+                        String role = getTrustRole(entry.getValue(), player.getUUID(), claimId);
+                        if (roleCanEditAnyFlag(role)) {
+                            flagClaimIds.add(claimId);
+                            claimDisplayNames.put(claimId, getClaimDisplayName(claimId));
+                        }
                     }
                 }
             }
@@ -1222,11 +1290,15 @@ public class ClaimManager {
             }
 
             Map<String, Map<String, Boolean>> myFlagsMap = new HashMap<>();
-            for (String claimId : allMyClaimIds) {
-                myFlagsMap.put(claimId, new HashMap<>(getFlagsForClaim(visibleOwner, claimId)));
+            for (String claimId : flagClaimIds) {
+                UUID flagOwner = isAdminMap ? ADMIN_UUID : getClaimOwner(claimId);
+                if (flagOwner != null) {
+                    myFlagsMap.put(claimId, new HashMap<>(getFlagsForClaim(flagOwner, claimId)));
+                    claimDisplayNames.put(claimId, getClaimDisplayName(claimId));
+                }
             }
 
-            SyncData data = new SyncData(localClaims, trustedNamesPerClaim, trustedRolesPerClaim, myFlagsMap, allMyClaimIds, claimDisplayNames, getMaxSlots(player.getUUID()), getUsedClaimCount(player.getUUID()), getNextSlotCost(player.getUUID()));
+            SyncData data = new SyncData(localClaims, trustedNamesPerClaim, trustedRolesPerClaim, myFlagsMap, allMyClaimIds, flagClaimIds, claimDisplayNames, getMaxSlots(player.getUUID()), getUsedClaimCount(player.getUUID()), getNextSlotCost(player.getUUID()));
             PacketHandler.sendToPlayer(new PacketHandler.S2C_SyncClaimData(GSON.toJson(data), isAdminMap), player);
         } catch (Exception e) {
             e.printStackTrace();
@@ -1240,16 +1312,18 @@ public class ClaimManager {
         public Map<String, Map<UUID, String>> trustedRolesPerClaim;
         public Map<String, Map<String, Boolean>> myFlags;
         public Set<String> allClaimNames;
+        public Set<String> flagClaimNames;
         public Map<String, String> claimDisplayNames;
         public int maxSlots, usedSlots;
         public double nextSlotCost;
 
-        public SyncData(Map<String, ClientClaimInfo> m, Map<String, Map<UUID, String>> t, Map<String, Map<UUID, String>> roles, Map<String, Map<String, Boolean>> flags, Set<String> names, Map<String, String> displayNames, int max, int used, double cost) {
+        public SyncData(Map<String, ClientClaimInfo> m, Map<String, Map<UUID, String>> t, Map<String, Map<UUID, String>> roles, Map<String, Map<String, Boolean>> flags, Set<String> names, Set<String> flagNames, Map<String, String> displayNames, int max, int used, double cost) {
             this.map = m;
             this.trustedPerClaim = t;
             this.trustedRolesPerClaim = roles;
             this.myFlags = flags;
             this.allClaimNames = names;
+            this.flagClaimNames = flagNames;
             this.claimDisplayNames = displayNames;
             this.maxSlots = max;
             this.usedSlots = used;

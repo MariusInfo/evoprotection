@@ -33,7 +33,8 @@ public class FlagScreen extends Screen {
         this.myFlags.clear();
         if (data.myFlags != null) this.myFlags.putAll(data.myFlags);
         this.myClaimIds.clear();
-        if (data.allClaimNames != null) this.myClaimIds.addAll(data.allClaimNames);
+        Set<String> flagClaims = data.flagClaimNames != null ? data.flagClaimNames : data.allClaimNames;
+        if (flagClaims != null) this.myClaimIds.addAll(flagClaims);
         this.claimDisplayNames.clear();
         if (data.claimDisplayNames != null) this.claimDisplayNames.putAll(data.claimDisplayNames);
         sortClaims();
@@ -166,7 +167,6 @@ public class FlagScreen extends Screen {
         } else {
             String currentClaimId = myClaimIds.get(currentClaimIndex);
             g.drawCenteredString(this.font, LanguageManager.get("gui.flags.desc1") + getDisplayName(currentClaimId), sw/2, y + 40, 0xFFFFFF);
-            g.drawCenteredString(this.font, LanguageManager.get("gui.flags.desc2"), sw/2, y + imageHeight - 55, 0xAAAAAA);
         }
 
         for (CustomButton b : buttons) {

@@ -387,8 +387,7 @@ public class ProtectionEvents {
                 ChunkPos current = player.chunkPosition();
                 String dim = player.level().dimension().location().toString();
 
-                UUID owner = ClaimManager.get().getChunkOwner(current, dim);
-                String name = ClaimManager.get().getOwnerName(owner);
+                String name = ClaimManager.get().getClaimEnterName(current, dim);
                 String lastOwnerName = lastChunkOwnerMap.get(player.getUUID());
 
                 if (!name.equals(lastOwnerName)) {
