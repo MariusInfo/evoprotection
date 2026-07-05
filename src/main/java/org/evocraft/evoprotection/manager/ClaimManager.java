@@ -2,6 +2,8 @@ package org.evocraft.evoprotection.manager;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.google.gson.reflect.TypeToken;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
@@ -31,14 +33,20 @@ import java.util.concurrent.TimeUnit;
 public class ClaimManager {
     private static ClaimManager INSTANCE;
     private static final UUID ADMIN_UUID = new UUID(0, 0);
+    private static final String ADMIN_CLAIM_NAME = "ADMIN";
     private static final int CLIENT_MAP_RADIUS = 4;
+    public static final String ROLE_COOWNER = "coowner";
+    public static final String ROLE_ADMIN = "admin";
+    public static final String ROLE_FRIEND = "friend";
+    public static final String ROLE_VISITOR = "visitor";
+    private static final Set<String> BUILD_ROLES = Set.of(ROLE_COOWNER, ROLE_ADMIN, ROLE_FRIEND);
     private final Gson GSON = new GsonBuilder().create();
 
     private final Map<String, UUID> chunkOwners = new ConcurrentHashMap<>();
     private final Map<String, String> chunkCustomNames = new ConcurrentHashMap<>();
     private final Map<UUID, String> playerNames = new ConcurrentHashMap<>();
     private final Map<UUID, Integer> boughtSlots = new ConcurrentHashMap<>();
-    private final Map<UUID, Map<String, Set<UUID>>> trustedPlayers = new ConcurrentHashMap<>();
+    private final Map<UUID, Map<String, Map<UUID, String>>> trustedPlayers = new ConcurrentHashMap<>();
     private final Map<UUID, Map<String, Map<String, Boolean>>> claimFlags = new ConcurrentHashMap<>();
     private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "EvoProtection-DB");
@@ -127,6 +135,8 @@ public class ClaimManager {
         if (claimId == null || claimId.isEmpty()) return "";
 
         for (String key : getChunkKeysForClaimId(claimId, null)) {
+            if (ADMIN_UUID.equals(chunkOwners.get(key))) return ADMIN_CLAIM_NAME;
+
             String name = chunkCustomNames.get(key);
             if (name != null && !name.trim().isEmpty()) return name;
         }
@@ -139,33 +149,153 @@ public class ClaimManager {
         return claimId;
     }
 
-    private Set<UUID> getTrustedSet(UUID owner, String claimId) {
-        Map<String, Set<UUID>> trusts = trustedPlayers.get(owner);
-        if (trusts == null) return Collections.emptySet();
+    public static String normalizeTrustRole(String role) {
+        if (role == null) return ROLE_FRIEND;
+        String normalized = role.trim().toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case ROLE_COOWNER, ROLE_ADMIN, ROLE_FRIEND, ROLE_VISITOR -> normalized;
+            case "prieten" -> ROLE_FRIEND;
+            case "vizitator" -> ROLE_VISITOR;
+            default -> ROLE_FRIEND;
+        };
+    }
 
-        Set<UUID> exact = trusts.get(claimId);
+    public static boolean roleCanBuild(String role) {
+        return BUILD_ROLES.contains(normalizeTrustRole(role));
+    }
+
+    public static String[] getAvailableTrustRoles() {
+        return new String[]{ROLE_COOWNER, ROLE_ADMIN, ROLE_FRIEND, ROLE_VISITOR};
+    }
+
+    public static String normalizeFlagName(String flagName) {
+        if (flagName == null) return "";
+        String normalized = flagName.trim().toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case "always_day", "always_middle_day" -> ClaimEnvironmentManager.FLAG_ALWAYS_MIDDLE_DAY;
+            case "always_night", "always_middle_night" -> ClaimEnvironmentManager.FLAG_ALWAYS_MIDDLE_NIGHT;
+            case "always_shiny" -> ClaimEnvironmentManager.FLAG_ALWAYS_SHINY;
+            case "always_rain" -> ClaimEnvironmentManager.FLAG_ALWAYS_RAIN;
+            default -> normalized;
+        };
+    }
+
+    private static String getLegacyFlagName(String normalizedFlagName) {
+        return switch (normalizedFlagName) {
+            case ClaimEnvironmentManager.FLAG_ALWAYS_MIDDLE_DAY -> "always_day";
+            case ClaimEnvironmentManager.FLAG_ALWAYS_MIDDLE_NIGHT -> "always_night";
+            default -> null;
+        };
+    }
+
+    private static void putFlagValue(Map<String, Boolean> flags, String flagName, boolean state) {
+        String normalized = normalizeFlagName(flagName);
+        flags.put(normalized, state);
+
+        String legacyName = getLegacyFlagName(normalized);
+        if (legacyName != null) {
+            flags.remove(legacyName);
+        }
+    }
+
+    private static Map<String, Boolean> normalizeFlagMap(Map<String, Boolean> flags) {
+        if (flags == null || flags.isEmpty()) return Collections.emptyMap();
+
+        Map<String, Boolean> normalized = new HashMap<>(flags);
+        for (Map.Entry<String, Boolean> entry : flags.entrySet()) {
+            String normalizedName = normalizeFlagName(entry.getKey());
+            normalized.putIfAbsent(normalizedName, entry.getValue());
+        }
+        return normalized;
+    }
+
+    private Map<UUID, String> getTrustRoles(UUID owner, String claimId) {
+        Map<String, Map<UUID, String>> trusts = trustedPlayers.get(owner);
+        if (trusts == null) return Collections.emptyMap();
+
+        Map<UUID, String> exact = trusts.get(claimId);
         if (exact != null) return exact;
 
-        Set<UUID> legacy = trusts.get(getClaimDisplayName(claimId));
-        return legacy != null ? legacy : Collections.emptySet();
+        Map<UUID, String> legacy = trusts.get(getClaimDisplayName(claimId));
+        return legacy != null ? legacy : Collections.emptyMap();
+    }
+
+    public String getTrustRole(UUID owner, UUID visitor, String claimId) {
+        if (owner == null || visitor == null || claimId == null || claimId.isEmpty()) return ROLE_VISITOR;
+        if (owner.equals(visitor)) return ROLE_COOWNER;
+        return normalizeTrustRole(getTrustRoles(owner, claimId).get(visitor));
+    }
+
+    private String getFlagStorageKey(UUID owner, String claimId) {
+        if (owner == null || claimId == null || claimId.isEmpty()) return claimId;
+
+        String displayName = getClaimDisplayName(claimId);
+        if (displayName == null || displayName.trim().isEmpty()) return claimId;
+        return displayName.trim();
+    }
+
+    private Set<String> getClaimIdsWithDisplayName(UUID owner, String displayName) {
+        Set<String> claimIds = new TreeSet<>();
+        if (owner == null || displayName == null || displayName.trim().isEmpty()) return claimIds;
+
+        String targetName = displayName.trim();
+        for (Map.Entry<String, UUID> entry : chunkOwners.entrySet()) {
+            if (!owner.equals(entry.getValue())) continue;
+
+            String claimId = getClaimIdFromChunkKey(entry.getKey());
+            String currentName = getClaimDisplayName(claimId);
+            if (currentName != null && targetName.equals(currentName.trim())) {
+                claimIds.add(claimId);
+            }
+        }
+        return claimIds;
+    }
+
+    private boolean hasOtherClaimWithDisplayName(UUID owner, String displayName, String removedClaimId) {
+        for (String claimId : getClaimIdsWithDisplayName(owner, displayName)) {
+            if (!claimId.equals(removedClaimId)) return true;
+        }
+        return false;
     }
 
     private Map<String, Boolean> getFlagsForClaim(UUID owner, String claimId) {
+        if (owner == null || claimId == null || claimId.isEmpty()) return Collections.emptyMap();
+
         Map<String, Map<String, Boolean>> flags = claimFlags.get(owner);
         if (flags == null) return Collections.emptyMap();
 
-        Map<String, Boolean> exact = flags.get(claimId);
-        if (exact != null) return exact;
+        String storageKey = getFlagStorageKey(owner, claimId);
+        Map<String, Boolean> grouped = flags.get(storageKey);
+        if (grouped != null) return normalizeFlagMap(grouped);
 
-        Map<String, Boolean> legacy = flags.get(getClaimDisplayName(claimId));
-        return legacy != null ? legacy : Collections.emptyMap();
+        String displayName = getClaimDisplayName(claimId);
+        if (displayName != null && !storageKey.equals(displayName)) {
+            Map<String, Boolean> legacyDisplay = flags.get(displayName);
+            if (legacyDisplay != null) return normalizeFlagMap(legacyDisplay);
+        }
+
+        Map<String, Boolean> merged = new HashMap<>();
+        for (String siblingClaimId : getClaimIdsWithDisplayName(owner, storageKey)) {
+            Map<String, Boolean> siblingFlags = flags.get(siblingClaimId);
+            if (siblingFlags != null) {
+                merged.putAll(normalizeFlagMap(siblingFlags));
+            }
+        }
+
+        Map<String, Boolean> exact = flags.get(claimId);
+        if (exact != null) {
+            merged.putAll(normalizeFlagMap(exact));
+        }
+
+        return merged.isEmpty() ? Collections.emptyMap() : merged;
     }
 
     private void removeClaimMetadata(UUID owner, String claimId) {
         if (owner == null || claimId == null || claimId.isEmpty()) return;
         String legacyName = getClaimDisplayName(claimId);
+        String flagStorageKey = getFlagStorageKey(owner, claimId);
 
-        Map<String, Set<UUID>> trusts = trustedPlayers.get(owner);
+        Map<String, Map<UUID, String>> trusts = trustedPlayers.get(owner);
         if (trusts != null) {
             trusts.remove(claimId);
             trusts.remove(legacyName);
@@ -174,10 +304,53 @@ public class ClaimManager {
 
         Map<String, Map<String, Boolean>> flags = claimFlags.get(owner);
         if (flags != null) {
-            flags.remove(claimId);
-            flags.remove(legacyName);
+            boolean hasOtherNamedClaim = hasOtherClaimWithDisplayName(owner, flagStorageKey, claimId);
+            if (hasOtherNamedClaim) {
+                Map<String, Boolean> sharedFlags = new HashMap<>(getFlagsForClaim(owner, claimId));
+                if (!sharedFlags.isEmpty()) {
+                    flags.put(flagStorageKey, sharedFlags);
+                }
+                if (!flagStorageKey.equals(claimId)) {
+                    flags.remove(claimId);
+                }
+            } else {
+                flags.remove(claimId);
+                flags.remove(flagStorageKey);
+                flags.remove(legacyName);
+            }
             savePlayerFlags(owner);
         }
+    }
+
+    private Map<String, Map<UUID, String>> parseTrustedData(String trustedJson) {
+        Map<String, Map<UUID, String>> parsed = new HashMap<>();
+        if (trustedJson == null || trustedJson.isEmpty()) return parsed;
+
+        try {
+            JsonObject root = GSON.fromJson(trustedJson, JsonObject.class);
+            if (root == null) return parsed;
+
+            for (Map.Entry<String, JsonElement> claimEntry : root.entrySet()) {
+                Map<UUID, String> roles = new HashMap<>();
+                JsonElement value = claimEntry.getValue();
+
+                if (value != null && value.isJsonArray()) {
+                    for (JsonElement uuidElement : value.getAsJsonArray()) {
+                        roles.put(UUID.fromString(uuidElement.getAsString()), ROLE_FRIEND);
+                    }
+                } else if (value != null && value.isJsonObject()) {
+                    for (Map.Entry<String, JsonElement> roleEntry : value.getAsJsonObject().entrySet()) {
+                        roles.put(UUID.fromString(roleEntry.getKey()), normalizeTrustRole(roleEntry.getValue().getAsString()));
+                    }
+                }
+
+                parsed.put(claimEntry.getKey(), roles);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        return parsed;
     }
 
     public static void initialize() {
@@ -278,9 +451,7 @@ public class ClaimManager {
 
                         String trustedJson = rs.getString("trusted_data");
                         if (trustedJson != null && !trustedJson.isEmpty()) {
-                            java.lang.reflect.Type type = new TypeToken<Map<String, Set<UUID>>>(){}.getType();
-                            Map<String, Set<UUID>> trusted = GSON.fromJson(trustedJson, type);
-                            trustedPlayers.put(uuid, trusted);
+                            trustedPlayers.put(uuid, parseTrustedData(trustedJson));
                         }
                     }
                 }
@@ -816,7 +987,7 @@ public class ClaimManager {
                 saveClaim(chunkKey, toId, chunkCustomNames.getOrDefault(chunkKey, ""));
             }
         }
-        Map<String, Set<UUID>> fromTrusts = trustedPlayers.remove(fromId);
+        Map<String, Map<UUID, String>> fromTrusts = trustedPlayers.remove(fromId);
         if (fromTrusts != null) {
             trustedPlayers.computeIfAbsent(toId, k -> new HashMap<>()).putAll(fromTrusts);
         }
@@ -838,11 +1009,10 @@ public class ClaimManager {
 
     public void adminClaim(ChunkPos pos, String dim, String name) {
         String key = makeChunkKey(pos, dim);
-        String displayName = (name == null || name.trim().isEmpty()) ? "Zona Admin" : name.trim();
         chunkOwners.put(key, ADMIN_UUID);
-        playerNames.put(ADMIN_UUID, "§6" + displayName);
-        chunkCustomNames.put(key, displayName);
-        saveClaim(key, ADMIN_UUID, displayName);
+        playerNames.put(ADMIN_UUID, "§6" + ADMIN_CLAIM_NAME);
+        chunkCustomNames.put(key, ADMIN_CLAIM_NAME);
+        saveClaim(key, ADMIN_UUID, ADMIN_CLAIM_NAME);
         savePlayerSettings(ADMIN_UUID);
     }
 
@@ -883,32 +1053,62 @@ public class ClaimManager {
     }
 
     public boolean setFlag(UUID owner, String claimId, String flagName, boolean state) {
+        flagName = normalizeFlagName(flagName);
         if (claimId == null || claimId.isEmpty() || !ownsClaim(owner, claimId)) return false;
         Map<String, Map<String, Boolean>> ownerFlags = claimFlags.computeIfAbsent(owner, k -> new HashMap<>());
-        Map<String, Boolean> flags = ownerFlags.get(claimId);
+        String storageKey = getFlagStorageKey(owner, claimId);
+        Map<String, Boolean> flags = ownerFlags.get(storageKey);
         if (flags == null) {
             flags = new HashMap<>(getFlagsForClaim(owner, claimId));
-            ownerFlags.put(claimId, flags);
         }
-        flags.put(flagName, state);
+
+        for (String siblingClaimId : getClaimIdsWithDisplayName(owner, storageKey)) {
+            if (!storageKey.equals(siblingClaimId)) {
+                ownerFlags.remove(siblingClaimId);
+            }
+        }
+
+        String legacyDisplayName = getClaimDisplayName(claimId);
+        if (legacyDisplayName != null && !storageKey.equals(legacyDisplayName)) {
+            ownerFlags.remove(legacyDisplayName);
+        }
+        ownerFlags.put(storageKey, flags);
+
+        putFlagValue(flags, flagName, state);
+        if (state) {
+            if (ClaimEnvironmentManager.FLAG_ALWAYS_MIDDLE_DAY.equals(flagName)) {
+                putFlagValue(flags, ClaimEnvironmentManager.FLAG_ALWAYS_MIDDLE_NIGHT, false);
+            } else if (ClaimEnvironmentManager.FLAG_ALWAYS_MIDDLE_NIGHT.equals(flagName)) {
+                putFlagValue(flags, ClaimEnvironmentManager.FLAG_ALWAYS_MIDDLE_DAY, false);
+            } else if (ClaimEnvironmentManager.FLAG_ALWAYS_SHINY.equals(flagName)) {
+                putFlagValue(flags, ClaimEnvironmentManager.FLAG_ALWAYS_RAIN, false);
+            } else if (ClaimEnvironmentManager.FLAG_ALWAYS_RAIN.equals(flagName)) {
+                putFlagValue(flags, ClaimEnvironmentManager.FLAG_ALWAYS_SHINY, false);
+            }
+        }
         savePlayerFlags(owner);
         return true;
     }
 
     public boolean getFlag(UUID owner, String claimId, String flagName) {
         if (owner == null || claimId == null || claimId.isEmpty()) return false;
-        return getFlagsForClaim(owner, claimId).getOrDefault(flagName, false);
+        String normalized = normalizeFlagName(flagName);
+        Map<String, Boolean> flags = getFlagsForClaim(owner, claimId);
+        if (flags.containsKey(normalized)) return flags.getOrDefault(normalized, false);
+
+        String legacyName = getLegacyFlagName(normalized);
+        return legacyName != null && flags.getOrDefault(legacyName, false);
     }
 
-    public boolean addTrust(ServerPlayer owner, UUID target, String claimId) {
+    public boolean addTrust(ServerPlayer owner, UUID target, String claimId, String role) {
         if (claimId == null || claimId.isEmpty() || !ownsClaim(owner.getUUID(), claimId)) return false;
-        Map<String, Set<UUID>> ownerTrusts = trustedPlayers.computeIfAbsent(owner.getUUID(), k -> new HashMap<>());
-        Set<UUID> trusts = ownerTrusts.get(claimId);
+        Map<String, Map<UUID, String>> ownerTrusts = trustedPlayers.computeIfAbsent(owner.getUUID(), k -> new HashMap<>());
+        Map<UUID, String> trusts = ownerTrusts.get(claimId);
         if (trusts == null) {
-            trusts = new HashSet<>(getTrustedSet(owner.getUUID(), claimId));
+            trusts = new HashMap<>(getTrustRoles(owner.getUUID(), claimId));
             ownerTrusts.put(claimId, trusts);
         }
-        trusts.add(target);
+        trusts.put(target, normalizeTrustRole(role));
         savePlayerSettings(owner.getUUID());
         syncToClient(owner);
         return true;
@@ -917,7 +1117,7 @@ public class ClaimManager {
     public boolean removeTrust(ServerPlayer owner, UUID target, String claimId) {
         if (claimId == null || claimId.isEmpty() || !ownsClaim(owner.getUUID(), claimId)) return false;
         if (trustedPlayers.containsKey(owner.getUUID())) {
-            Map<String, Set<UUID>> claimsTrusts = trustedPlayers.get(owner.getUUID());
+            Map<String, Map<UUID, String>> claimsTrusts = trustedPlayers.get(owner.getUUID());
             String trustKey = claimsTrusts.containsKey(claimId) ? claimId : getClaimDisplayName(claimId);
             if (claimsTrusts.containsKey(trustKey)) {
                 claimsTrusts.get(trustKey).remove(target);
@@ -932,7 +1132,7 @@ public class ClaimManager {
     public boolean isTrusted(UUID owner, UUID visitor, String claimId) {
         if (owner == null || owner.equals(visitor)) return true;
         if (claimId == null || claimId.isEmpty()) return false;
-        return getTrustedSet(owner, claimId).contains(visitor);
+        return roleCanBuild(getTrustRole(owner, visitor, claimId));
     }
 
     public UUID getChunkOwner(ChunkPos pos, String dim) {
@@ -941,12 +1141,15 @@ public class ClaimManager {
 
     public String getOwnerName(UUID uuid) {
         if (uuid == null) return "Wilderness";
+        if (ADMIN_UUID.equals(uuid)) return "§6" + ADMIN_CLAIM_NAME;
         String name = playerNames.get(uuid);
         return (name == null || name.isEmpty()) ? "Necunoscut" : name;
     }
 
     public String getCustomName(ChunkPos pos, String dim) {
-        return chunkCustomNames.getOrDefault(makeChunkKey(pos, dim), "");
+        String key = makeChunkKey(pos, dim);
+        if (ADMIN_UUID.equals(chunkOwners.get(key))) return ADMIN_CLAIM_NAME;
+        return chunkCustomNames.getOrDefault(key, "");
     }
 
     public int getMaxSlots(UUID p) {
@@ -1003,9 +1206,11 @@ public class ClaimManager {
             }
 
             Map<String, Map<UUID, String>> trustedNamesPerClaim = new HashMap<>();
+            Map<String, Map<UUID, String>> trustedRolesPerClaim = new HashMap<>();
             for (String claimId : allMyClaimIds) {
                 Map<UUID, String> mappedNames = new HashMap<>();
-                for (UUID id : getTrustedSet(player.getUUID(), claimId)) {
+                Map<UUID, String> roles = new HashMap<>(getTrustRoles(player.getUUID(), claimId));
+                for (UUID id : roles.keySet()) {
                     if (id != null && player.getServer() != null) {
                         try {
                             player.getServer().getProfileCache().get(id).ifPresent(pr -> mappedNames.put(id, pr.getName()));
@@ -1013,6 +1218,7 @@ public class ClaimManager {
                     }
                 }
                 trustedNamesPerClaim.put(claimId, mappedNames);
+                trustedRolesPerClaim.put(claimId, roles);
             }
 
             Map<String, Map<String, Boolean>> myFlagsMap = new HashMap<>();
@@ -1020,7 +1226,7 @@ public class ClaimManager {
                 myFlagsMap.put(claimId, new HashMap<>(getFlagsForClaim(visibleOwner, claimId)));
             }
 
-            SyncData data = new SyncData(localClaims, trustedNamesPerClaim, myFlagsMap, allMyClaimIds, claimDisplayNames, getMaxSlots(player.getUUID()), getUsedClaimCount(player.getUUID()), getNextSlotCost(player.getUUID()));
+            SyncData data = new SyncData(localClaims, trustedNamesPerClaim, trustedRolesPerClaim, myFlagsMap, allMyClaimIds, claimDisplayNames, getMaxSlots(player.getUUID()), getUsedClaimCount(player.getUUID()), getNextSlotCost(player.getUUID()));
             PacketHandler.sendToPlayer(new PacketHandler.S2C_SyncClaimData(GSON.toJson(data), isAdminMap), player);
         } catch (Exception e) {
             e.printStackTrace();
@@ -1031,15 +1237,17 @@ public class ClaimManager {
     public static class SyncData {
         public Map<String, ClientClaimInfo> map;
         public Map<String, Map<UUID, String>> trustedPerClaim;
+        public Map<String, Map<UUID, String>> trustedRolesPerClaim;
         public Map<String, Map<String, Boolean>> myFlags;
         public Set<String> allClaimNames;
         public Map<String, String> claimDisplayNames;
         public int maxSlots, usedSlots;
         public double nextSlotCost;
 
-        public SyncData(Map<String, ClientClaimInfo> m, Map<String, Map<UUID, String>> t, Map<String, Map<String, Boolean>> flags, Set<String> names, Map<String, String> displayNames, int max, int used, double cost) {
+        public SyncData(Map<String, ClientClaimInfo> m, Map<String, Map<UUID, String>> t, Map<String, Map<UUID, String>> roles, Map<String, Map<String, Boolean>> flags, Set<String> names, Map<String, String> displayNames, int max, int used, double cost) {
             this.map = m;
             this.trustedPerClaim = t;
+            this.trustedRolesPerClaim = roles;
             this.myFlags = flags;
             this.allClaimNames = names;
             this.claimDisplayNames = displayNames;

@@ -31,6 +31,7 @@ import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.registries.ForgeRegistries;
 import net.minecraft.resources.ResourceLocation;
 import org.evocraft.evoprotection.EvoProtection;
+import org.evocraft.evoprotection.manager.ClaimEnvironmentManager;
 import org.evocraft.evoprotection.manager.ClaimManager;
 import org.evocraft.evoprotection.network.PacketHandler;
 import org.evocraft.evoprotection.manager.ProtectionConfig;
@@ -335,6 +336,7 @@ public class ProtectionEvents {
         if (event.phase != TickEvent.Phase.END || event.player.level().isClientSide()) return;
 
         if (event.player instanceof ServerPlayer player) {
+            ClaimEnvironmentManager.get().handlePlayerLocation(player);
 
             // --- NEW PAYDAY LOGIC ONLY IF IT IS PLOT MODE ---
             if (ProtectionConfig.get().isPlotMode) {
@@ -401,6 +403,35 @@ public class ProtectionEvents {
     public static void onPlayerLogOut(net.minecraftforge.event.entity.player.PlayerEvent.PlayerLoggedOutEvent event) {
         lastChunkOwnerMap.remove(event.getEntity().getUUID());
         activityMap.remove(event.getEntity().getUUID());
+        if (event.getEntity() instanceof ServerPlayer player) {
+            ClaimEnvironmentManager.get().clearPlayer(player);
+        } else {
+            ClaimEnvironmentManager.get().clearPlayer(event.getEntity().getUUID());
+        }
+    }
+
+    @SubscribeEvent
+    public static void onPlayerLogIn(net.minecraftforge.event.entity.player.PlayerEvent.PlayerLoggedInEvent event) {
+        if (event.getEntity() instanceof ServerPlayer player) {
+            ClaimEnvironmentManager.get().installInterceptor(player);
+            ClaimEnvironmentManager.get().forceRefreshPlayer(player);
+        }
+    }
+
+    @SubscribeEvent
+    public static void onPlayerRespawn(net.minecraftforge.event.entity.player.PlayerEvent.PlayerRespawnEvent event) {
+        if (event.getEntity() instanceof ServerPlayer player) {
+            ClaimEnvironmentManager.get().installInterceptor(player);
+            ClaimEnvironmentManager.get().forceRefreshPlayer(player);
+        }
+    }
+
+    @SubscribeEvent
+    public static void onPlayerChangedDimension(net.minecraftforge.event.entity.player.PlayerEvent.PlayerChangedDimensionEvent event) {
+        if (event.getEntity() instanceof ServerPlayer player) {
+            ClaimEnvironmentManager.get().installInterceptor(player);
+            ClaimEnvironmentManager.get().forceRefreshPlayer(player);
+        }
     }
 
     @SubscribeEvent(priority = EventPriority.HIGHEST)

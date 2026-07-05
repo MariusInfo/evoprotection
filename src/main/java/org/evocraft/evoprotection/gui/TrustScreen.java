@@ -4,6 +4,7 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import org.evocraft.evoprotection.manager.ClaimManager;
 import org.evocraft.evoprotection.manager.LanguageManager;
 import org.evocraft.evoprotection.manager.ProtectionConfig;
 import org.evocraft.evoprotection.network.PacketHandler;
@@ -13,6 +14,7 @@ import java.util.*;
 public class TrustScreen extends Screen {
     private final Screen parent;
     private final Map<String, Map<UUID, String>> trustedPerClaim;
+    private final Map<String, Map<UUID, String>> trustedRolesPerClaim;
     private final List<String> myClaimIds;
     private final Map<String, String> claimDisplayNames;
     private final int imageWidth = 320;
@@ -21,11 +23,13 @@ public class TrustScreen extends Screen {
 
     private int currentClaimIndex = 0;
     private EditBox nameInput;
+    private String selectedRole = ClaimManager.ROLE_FRIEND;
 
-    public TrustScreen(Screen parent, Map<String, Map<UUID, String>> trusted, Set<String> allClaimNames, Map<String, String> claimDisplayNames) {
+    public TrustScreen(Screen parent, Map<String, Map<UUID, String>> trusted, Map<String, Map<UUID, String>> roles, Set<String> allClaimNames, Map<String, String> claimDisplayNames) {
         super(Component.literal("Trust Manager"));
         this.parent = parent;
         this.trustedPerClaim = trusted;
+        this.trustedRolesPerClaim = roles != null ? roles : new HashMap<>();
         this.myClaimIds = new ArrayList<>(allClaimNames);
         this.claimDisplayNames = new HashMap<>(claimDisplayNames != null ? claimDisplayNames : new HashMap<>());
         sortClaims();
@@ -35,6 +39,8 @@ public class TrustScreen extends Screen {
         org.evocraft.evoprotection.manager.ClaimManager.SyncData data = new com.google.gson.Gson().fromJson(json, org.evocraft.evoprotection.manager.ClaimManager.SyncData.class);
         this.trustedPerClaim.clear();
         if (data.trustedPerClaim != null) this.trustedPerClaim.putAll(data.trustedPerClaim);
+        this.trustedRolesPerClaim.clear();
+        if (data.trustedRolesPerClaim != null) this.trustedRolesPerClaim.putAll(data.trustedRolesPerClaim);
 
         this.myClaimIds.clear();
         if (data.allClaimNames != null) this.myClaimIds.addAll(data.allClaimNames);
@@ -56,6 +62,21 @@ public class TrustScreen extends Screen {
 
     private String getDisplayName(String claimId) {
         return claimDisplayNames.getOrDefault(claimId, claimId);
+    }
+
+    private String getRoleLabel(String role) {
+        return LanguageManager.get("gui.trust.role." + ClaimManager.normalizeTrustRole(role));
+    }
+
+    private String getNextRole(String role) {
+        String normalized = ClaimManager.normalizeTrustRole(role);
+        String[] roles = ClaimManager.getAvailableTrustRoles();
+        for (int i = 0; i < roles.length; i++) {
+            if (roles[i].equals(normalized)) {
+                return roles[(i + 1) % roles.length];
+            }
+        }
+        return ClaimManager.ROLE_FRIEND;
     }
 
     private float getScale() {
@@ -107,21 +128,31 @@ public class TrustScreen extends Screen {
         nameInput = new EditBox(this.font, x + 20, y + 80, 160, 20, Component.literal("Player Name"));
         this.addRenderableWidget(nameInput);
 
-        buttons.add(new CustomButton(LanguageManager.get("gui.trust.btn_add"), x + 190, y + 80, 110, 20, () -> {
+        buttons.add(new CustomButton(getRoleLabel(selectedRole), x + 185, y + 80, 55, 20, () -> {
+            selectedRole = getNextRole(selectedRole);
+            this.init();
+        }));
+
+        buttons.add(new CustomButton(LanguageManager.get("gui.trust.btn_add"), x + 245, y + 80, 55, 20, () -> {
             String name = nameInput.getValue();
             String currentClaimId = myClaimIds.get(currentClaimIndex);
             if (!name.isEmpty()) {
-                PacketHandler.INSTANCE.sendToServer(new PacketHandler.C2S_ManageTrust(name, "", true, currentClaimId));
+                PacketHandler.INSTANCE.sendToServer(new PacketHandler.C2S_ManageTrust(name, "", true, currentClaimId, selectedRole));
             }
         }));
 
         String currentClaimId = myClaimIds.get(currentClaimIndex);
         Map<UUID, String> activeFriends = trustedPerClaim.getOrDefault(currentClaimId, new HashMap<>());
+        Map<UUID, String> activeRoles = trustedRolesPerClaim.getOrDefault(currentClaimId, new HashMap<>());
         int listY = y + 125;
         for (Map.Entry<UUID, String> entry : activeFriends.entrySet()) {
             UUID uuid = entry.getKey();
+            String currentRole = ClaimManager.normalizeTrustRole(activeRoles.get(uuid));
+            buttons.add(new CustomButton(getRoleLabel(currentRole), x + 170, listY - 2, 65, 16, () -> {
+                PacketHandler.INSTANCE.sendToServer(new PacketHandler.C2S_ManageTrust(entry.getValue(), uuid.toString(), true, currentClaimId, getNextRole(currentRole)));
+            }));
             buttons.add(new CustomButton(LanguageManager.get("gui.button.delete"), x + 240, listY - 2, 60, 16, () -> {
-                PacketHandler.INSTANCE.sendToServer(new PacketHandler.C2S_ManageTrust("", uuid.toString(), false, currentClaimId));
+                PacketHandler.INSTANCE.sendToServer(new PacketHandler.C2S_ManageTrust("", uuid.toString(), false, currentClaimId, ClaimManager.ROLE_VISITOR));
             }));
             listY += 25;
             if (listY > y + imageHeight - 40) break;
@@ -161,12 +192,13 @@ public class TrustScreen extends Screen {
             g.drawString(this.font, LanguageManager.get("gui.trust.list"), x + 20, y + 110, 0xAAAAAA, false);
 
             Map<UUID, String> activeFriends = trustedPerClaim.getOrDefault(currentClaimId, new HashMap<>());
+            Map<UUID, String> activeRoles = trustedRolesPerClaim.getOrDefault(currentClaimId, new HashMap<>());
             int listY = y + 125;
             if (activeFriends.isEmpty()) {
                 g.drawString(this.font, LanguageManager.get("gui.trust.empty"), x + 25, listY, 0xFF777777, false);
             } else {
-                for (String name : activeFriends.values()) {
-                    g.drawString(this.font, "• §f" + name, x + 25, listY + 2, 0xFFFFFF, false);
+                for (Map.Entry<UUID, String> entry : activeFriends.entrySet()) {
+                    g.drawString(this.font, "- §f" + this.font.plainSubstrByWidth(entry.getValue(), 130), x + 25, listY + 2, 0xFFFFFF, false);
                     listY += 25;
                     if (listY > y + imageHeight - 40) break;
                 }
@@ -209,7 +241,7 @@ public class TrustScreen extends Screen {
             outlineRounded(g, x, y, w, h, hover ? 0xFF6C9945 : 0xFF3A592D);
             g.pose().pushPose();
             g.pose().translate(x + w / 2f, y + (h - 8) / 2f, 0);
-            g.drawCenteredString(font, text, 0, 0, hover ? 0xFFFFFF : 0xFFDDDDDD);
+            g.drawCenteredString(font, font.plainSubstrByWidth(text, w - 6), 0, 0, hover ? 0xFFFFFF : 0xFFDDDDDD);
             g.pose().popPose();
         }
 

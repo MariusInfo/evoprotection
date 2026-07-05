@@ -12,6 +12,7 @@ import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.PacketDistributor;
 import net.minecraftforge.network.simple.SimpleChannel;
 import org.evocraft.evoprotection.EvoProtection;
+import org.evocraft.evoprotection.manager.ClaimEnvironmentManager;
 import org.evocraft.evoprotection.manager.ClaimManager;
 import org.evocraft.evoprotection.manager.LanguageManager;
 
@@ -41,6 +42,7 @@ public class PacketHandler {
         INSTANCE.registerMessage(nextId(), S2C_SyncPayDay.class, S2C_SyncPayDay::toBytes, S2C_SyncPayDay::new, S2C_SyncPayDay::handle);
 
         INSTANCE.registerMessage(nextId(), S2C_SyncLanguage.class, S2C_SyncLanguage::toBytes, S2C_SyncLanguage::new, S2C_SyncLanguage::handle);
+        INSTANCE.registerMessage(nextId(), S2C_EnvironmentOverride.class, S2C_EnvironmentOverride::toBytes, S2C_EnvironmentOverride::new, S2C_EnvironmentOverride::handle);
     }
 
     public static <MSG> void sendToPlayer(MSG message, ServerPlayer player) {
@@ -106,6 +108,54 @@ public class PacketHandler {
         }
         public boolean handle(Supplier<NetworkEvent.Context> ctx) {
             ctx.get().enqueueWork(() -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> ClientPacketHandler.handleSyncPayDay(secondsLeft, isIdle)));
+            ctx.get().setPacketHandled(true);
+            return true;
+        }
+    }
+
+    public static class S2C_EnvironmentOverride {
+        public static final int MODE_NORMAL = -1;
+        public static final int TIME_DAY = 0;
+        public static final int TIME_NIGHT = 1;
+        public static final int WEATHER_CLEAR = 0;
+        public static final int WEATHER_RAIN = 1;
+
+        public final int timeMode;
+        public final int weatherMode;
+        public final long serverDayTime;
+        public final boolean serverRaining;
+        public final float serverRainLevel;
+        public final float serverThunderLevel;
+
+        public S2C_EnvironmentOverride(int timeMode, int weatherMode, long serverDayTime, boolean serverRaining, float serverRainLevel, float serverThunderLevel) {
+            this.timeMode = timeMode;
+            this.weatherMode = weatherMode;
+            this.serverDayTime = serverDayTime;
+            this.serverRaining = serverRaining;
+            this.serverRainLevel = serverRainLevel;
+            this.serverThunderLevel = serverThunderLevel;
+        }
+
+        public S2C_EnvironmentOverride(FriendlyByteBuf buf) {
+            this.timeMode = buf.readInt();
+            this.weatherMode = buf.readInt();
+            this.serverDayTime = buf.readLong();
+            this.serverRaining = buf.readBoolean();
+            this.serverRainLevel = buf.readFloat();
+            this.serverThunderLevel = buf.readFloat();
+        }
+
+        public void toBytes(FriendlyByteBuf buf) {
+            buf.writeInt(timeMode);
+            buf.writeInt(weatherMode);
+            buf.writeLong(serverDayTime);
+            buf.writeBoolean(serverRaining);
+            buf.writeFloat(serverRainLevel);
+            buf.writeFloat(serverThunderLevel);
+        }
+
+        public boolean handle(Supplier<NetworkEvent.Context> ctx) {
+            ctx.get().enqueueWork(() -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> ClientPacketHandler.handleEnvironmentOverride(timeMode, weatherMode, serverDayTime, serverRaining, serverRainLevel, serverThunderLevel)));
             ctx.get().setPacketHandled(true);
             return true;
         }
@@ -211,7 +261,9 @@ public class PacketHandler {
             supplier.get().enqueueWork(() -> {
                 ServerPlayer player = supplier.get().getSender();
                 if (player != null) {
-                    ClaimManager.get().unclaimById(player, claimName);
+                    if (ClaimManager.get().unclaimById(player, claimName)) {
+                        ClaimEnvironmentManager.get().refreshAllPlayers(player.getServer());
+                    }
                 }
             });
             supplier.get().setPacketHandled(true);
@@ -253,6 +305,9 @@ public class PacketHandler {
 
                     UUID targetUUID = adminAction ? new UUID(0, 0) : player.getUUID();
                     if (!ClaimManager.get().setFlag(targetUUID, claimName, flagName, state)) return;
+                    if (ClaimEnvironmentManager.isEnvironmentFlag(flagName)) {
+                        ClaimEnvironmentManager.get().refreshClaimPlayers(player.getServer(), targetUUID, claimName);
+                    }
 
                     if (adminAction) {
                         ClaimManager.get().syncToAdminClient(player);
@@ -299,10 +354,14 @@ public class PacketHandler {
                 if (player != null) {
                     ChunkPos target = new ChunkPos(chunkX, chunkZ);
                     if (!ClaimManager.get().isChunkInsideClientMap(player, target)) return;
+                    boolean changed;
                     if (isClaiming) {
-                        ClaimManager.get().claimChunk(player, target, customName);
+                        changed = ClaimManager.get().claimChunk(player, target, customName);
                     } else {
-                        ClaimManager.get().unclaimChunk(player, target);
+                        changed = ClaimManager.get().unclaimChunk(player, target);
+                    }
+                    if (changed) {
+                        ClaimEnvironmentManager.get().refreshAllPlayers(player.getServer());
                     }
                 }
             });
@@ -343,8 +402,11 @@ public class PacketHandler {
                     String dim = player.level().dimension().location().toString();
                     if (isClaiming) {
                         ClaimManager.get().adminClaim(target, dim, customName);
+                        ClaimEnvironmentManager.get().refreshAllPlayers(player.getServer());
                     } else {
-                        ClaimManager.get().removeAnyClaim(target, dim);
+                        if (ClaimManager.get().removeAnyClaim(target, dim)) {
+                            ClaimEnvironmentManager.get().refreshAllPlayers(player.getServer());
+                        }
                     }
                     ClaimManager.get().syncToAdminClient(player);
                 }
@@ -359,24 +421,28 @@ public class PacketHandler {
         private final String targetUuidStr;
         private final boolean isAdding;
         private final String claimName;
+        private final String role;
 
-        public C2S_ManageTrust(String targetName, String targetUuidStr, boolean isAdding, String claimName) {
+        public C2S_ManageTrust(String targetName, String targetUuidStr, boolean isAdding, String claimName, String role) {
             this.targetName = targetName;
             this.targetUuidStr = targetUuidStr;
             this.isAdding = isAdding;
             this.claimName = claimName;
+            this.role = ClaimManager.normalizeTrustRole(role);
         }
         public C2S_ManageTrust(FriendlyByteBuf buf) {
             this.targetName = buf.readUtf();
             this.targetUuidStr = buf.readUtf();
             this.isAdding = buf.readBoolean();
             this.claimName = buf.readUtf();
+            this.role = ClaimManager.normalizeTrustRole(buf.readUtf());
         }
         public void toBytes(FriendlyByteBuf buf) {
             buf.writeUtf(targetName);
             buf.writeUtf(targetUuidStr);
             buf.writeBoolean(isAdding);
             buf.writeUtf(claimName);
+            buf.writeUtf(role);
         }
         public boolean handle(Supplier<NetworkEvent.Context> supplier) {
             supplier.get().enqueueWork(() -> {
@@ -384,11 +450,27 @@ public class PacketHandler {
                 if (player != null) {
                     String lang = ClaimManager.get().getPlayerLanguage(player.getUUID());
                     if (isAdding) {
-                        ServerPlayer target = player.getServer().getPlayerList().getPlayerByName(targetName);
-                        if (target != null) {
-                            if (ClaimManager.get().addTrust(player, target.getUUID(), claimName)) {
+                        UUID targetUuid = null;
+                        String targetDisplay = targetName;
+                        if (targetUuidStr != null && !targetUuidStr.isEmpty()) {
+                            try {
+                                targetUuid = UUID.fromString(targetUuidStr);
+                            } catch (Exception ignored) { }
+                        }
+
+                        if (targetUuid == null) {
+                            ServerPlayer target = player.getServer().getPlayerList().getPlayerByName(targetName);
+                            if (target != null) {
+                                targetUuid = target.getUUID();
+                                targetDisplay = target.getName().getString();
+                            }
+                        }
+
+                        if (targetUuid != null) {
+                            if (ClaimManager.get().addTrust(player, targetUuid, claimName, role)) {
                                 String displayName = ClaimManager.get().getClaimDisplayName(claimName);
-                                player.sendSystemMessage(Component.literal(LanguageManager.get(lang, "msg.trust.added", target.getName().getString(), displayName)));
+                                String roleLabel = LanguageManager.get(lang, "gui.trust.role." + ClaimManager.normalizeTrustRole(role));
+                                player.sendSystemMessage(Component.literal(LanguageManager.get(lang, "msg.trust.role_set", targetDisplay, roleLabel, displayName)));
                             }
                         } else {
                             player.sendSystemMessage(Component.literal(LanguageManager.get(lang, "msg.trust.offline")));

@@ -2,6 +2,7 @@ package org.evocraft.evoprotection.network;
 
 import net.minecraft.client.Minecraft;
 import net.minecraftforge.fml.ModList;
+import org.evocraft.evoprotection.client.ClientEnvironmentManager;
 import org.evocraft.evoprotection.gui.AdminClaimMapScreen;
 import org.evocraft.evoprotection.gui.ClaimMapScreen;
 import org.evocraft.evoprotection.gui.DeleteClaimScreen;
@@ -22,6 +23,10 @@ public class ClientPacketHandler {
     public static void handleSyncPayDay(int secondsLeft, boolean isIdle) {
         org.evocraft.evoprotection.client.ClientPayDayData.secondsLeft = secondsLeft;
         org.evocraft.evoprotection.client.ClientPayDayData.isIdle = isIdle;
+    }
+
+    public static void handleEnvironmentOverride(int timeMode, int weatherMode, long serverDayTime, boolean serverRaining, float serverRainLevel, float serverThunderLevel) {
+        ClientEnvironmentManager.setOverride(timeMode, weatherMode, serverDayTime, serverRaining, serverRainLevel, serverThunderLevel);
     }
 
     public static void handleSyncClaimData(String jsonMapData, boolean isAdminMap) {

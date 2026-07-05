@@ -16,7 +16,7 @@ public class FlagScreen extends Screen {
 
     private int currentClaimIndex = 0;
     private final int imageWidth = 320;
-    private final int imageHeight = 285;
+    private final int imageHeight = 335;
     private final List<CustomButton> buttons = new ArrayList<>();
 
     public FlagScreen(Screen parent, Map<String, Map<String, Boolean>> flags, Set<String> allClaimNames, Map<String, String> claimDisplayNames) {
@@ -48,6 +48,8 @@ public class FlagScreen extends Screen {
 
     private void sortClaims() {
         this.myClaimIds.sort(Comparator.comparing(this::getDisplayName).thenComparing(id -> id));
+        Set<String> seenDisplayNames = new HashSet<>();
+        this.myClaimIds.removeIf(id -> !seenDisplayNames.add(getDisplayName(id)));
         if (currentClaimIndex >= myClaimIds.size()) {
             currentClaimIndex = Math.max(0, myClaimIds.size() - 1);
         }
@@ -108,6 +110,8 @@ public class FlagScreen extends Screen {
         buttons.add(new CustomButton(LanguageManager.get("gui.flags.pickup") + getStatus("item_pickup"), x + 15, startY + 100, 140, 20, () -> toggleFlag("item_pickup")));
         buttons.add(new CustomButton(LanguageManager.get("gui.flags.natural_animals") + getStatus("natural_animals"), x + 15, startY + 125, 140, 20, () -> toggleFlag("natural_animals")));
         buttons.add(new CustomButton(LanguageManager.get("gui.flags.spawner_animals") + getStatus("spawner_animals"), x + 15, startY + 150, 140, 20, () -> toggleFlag("spawner_animals")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.always_middle_day") + getStatus("always_middle_day"), x + 15, startY + 175, 140, 20, () -> toggleFlag("always_middle_day")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.always_shiny") + getStatus("always_shiny"), x + 15, startY + 200, 140, 20, () -> toggleFlag("always_shiny")));
 
         // Right Column
         buttons.add(new CustomButton(LanguageManager.get("gui.flags.explosions") + getStatus("explosions"), x + 165, startY, 140, 20, () -> toggleFlag("explosions")));
@@ -117,6 +121,8 @@ public class FlagScreen extends Screen {
         buttons.add(new CustomButton(LanguageManager.get("gui.flags.hurt_animals") + getStatus("hurt_animals"), x + 165, startY + 100, 140, 20, () -> toggleFlag("hurt_animals")));
         buttons.add(new CustomButton(LanguageManager.get("gui.flags.natural_monsters") + getStatus("natural_monsters"), x + 165, startY + 125, 140, 20, () -> toggleFlag("natural_monsters")));
         buttons.add(new CustomButton(LanguageManager.get("gui.flags.spawner_monsters") + getStatus("spawner_monsters"), x + 165, startY + 150, 140, 20, () -> toggleFlag("spawner_monsters")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.always_middle_night") + getStatus("always_middle_night"), x + 165, startY + 175, 140, 20, () -> toggleFlag("always_middle_night")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.always_rain") + getStatus("always_rain"), x + 165, startY + 200, 140, 20, () -> toggleFlag("always_rain")));
     }
 
     private String getStatus(String flag) {
@@ -204,7 +210,7 @@ public class FlagScreen extends Screen {
             outlineRounded(g, x, y, w, h, hover ? 0xFF45996C : 0xFF2D5947);
             g.pose().pushPose();
             g.pose().translate(x + w / 2f, y + (h - 8) / 2f, 0);
-            g.drawCenteredString(font, text, 0, 0, hover ? 0xFFFFFF : 0xFFDDDDDD);
+            g.drawCenteredString(font, font.plainSubstrByWidth(text, w - 6), 0, 0, hover ? 0xFFFFFF : 0xFFDDDDDD);
             g.pose().popPose();
         }
 

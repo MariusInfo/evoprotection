@@ -113,6 +113,7 @@ public class LanguageManager {
             dict.put("msg.event.bought", "§a[Protection Event] §e%s bought a discounted slot! Stock left: §c%d");
             dict.put("msg.flag.updated", "§8[§aEvoProtections§8] §fFlag §e%s §fon §b%s §fwas updated: %s");
             dict.put("msg.trust.added", "§8[§aEvoProtections§8] §fPlayer §e%s §fwas added as friend for §b%s");
+            dict.put("msg.trust.role_set", "\u00A78[\u00A7aEvoProtections\u00A78] \u00A7fPlayer \u00A7e%s \u00A7fnow has role \u00A7e%s \u00A7ffor \u00A7b%s");
             dict.put("msg.trust.offline", "§c[!] Player is offline or does not exist!");
             dict.put("msg.trust.removed", "§8[§aEvoProtections§8] §fA player was removed from protection §b%s");
 
@@ -156,6 +157,10 @@ public class LanguageManager {
             dict.put("gui.trust.no_claim", "§cYou have no protection created!");
             dict.put("gui.trust.selected_plot", "Selected Plot: §e");
             dict.put("gui.trust.selected_claim", "Selected Protection: §e");
+            dict.put("gui.trust.role.coowner", "Coowner");
+            dict.put("gui.trust.role.admin", "Admin");
+            dict.put("gui.trust.role.friend", "Friend");
+            dict.put("gui.trust.role.visitor", "Visitor");
 
             // Flags
             dict.put("gui.flags.title", "§lPROTECTION SETTINGS (FLAGS)");
@@ -171,10 +176,14 @@ public class LanguageManager {
             dict.put("gui.flags.chests", "Chests / Forges: ");
             dict.put("gui.flags.public_build", "Public Build: ");
             dict.put("gui.flags.hurt_animals", "Hurt Animals: ");
-            dict.put("gui.flags.natural_animals", "Natural Animals: ");
-            dict.put("gui.flags.spawner_animals", "Spawner Animals: ");
-            dict.put("gui.flags.natural_monsters", "Natural Monsters: ");
-            dict.put("gui.flags.spawner_monsters", "Spawner Monsters: ");
+            dict.put("gui.flags.natural_animals", "Natural Animal Spawn: ");
+            dict.put("gui.flags.spawner_animals", "Spawner Animal Spawn: ");
+            dict.put("gui.flags.natural_monsters", "Natural Monster Spawn: ");
+            dict.put("gui.flags.spawner_monsters", "Spawner Monster Spawn: ");
+            dict.put("gui.flags.always_middle_day", "Always Middle Day: ");
+            dict.put("gui.flags.always_middle_night", "Always Middle Night: ");
+            dict.put("gui.flags.always_shiny", "Always Shiny: ");
+            dict.put("gui.flags.always_rain", "Always Rain: ");
 
             // Delete & Admin
             dict.put("gui.delete.title", "§c§lDELETE A PROTECTION");
@@ -203,6 +212,7 @@ public class LanguageManager {
             dict.put("msg.event.bought", "§a[Eveniment Protectii] §e%s a cumparat un slot la reducere! Stoc ramas: §c%d");
             dict.put("msg.flag.updated", "§8[§aEvoProtectii§8] §fSetarea §e%s §fpe §b%s §fa fost actualizata: %s");
             dict.put("msg.trust.added", "§8[§aEvoProtectii§8] §fJucatorul §e%s §fa fost adaugat la prieteni pentru §b%s");
+            dict.put("msg.trust.role_set", "\u00A78[\u00A7aEvoProtectii\u00A78] \u00A7fJucatorul \u00A7e%s \u00A7fare rolul \u00A7e%s \u00A7fpentru \u00A7b%s");
             dict.put("msg.trust.offline", "§c[!] Jucatorul nu este online sau nu exista!");
             dict.put("msg.trust.removed", "§8[§aEvoProtectii§8] §fUn jucator a fost sters de la protectia §b%s");
 
@@ -246,6 +256,10 @@ public class LanguageManager {
             dict.put("gui.trust.no_claim", "§cNu ai nicio protectie creata!");
             dict.put("gui.trust.selected_plot", "Plot Selectat: §e");
             dict.put("gui.trust.selected_claim", "Protectie Selectata: §e");
+            dict.put("gui.trust.role.coowner", "Coowner");
+            dict.put("gui.trust.role.admin", "Admin");
+            dict.put("gui.trust.role.friend", "Prieten");
+            dict.put("gui.trust.role.visitor", "Vizitator");
 
             // Flags
             dict.put("gui.flags.title", "§lSETARI PROTECTIE (FLAGS)");
@@ -261,10 +275,14 @@ public class LanguageManager {
             dict.put("gui.flags.chests", "Cufere / Forje: ");
             dict.put("gui.flags.public_build", "Construire Publica: ");
             dict.put("gui.flags.hurt_animals", "Ucidere Animale: ");
-            dict.put("gui.flags.natural_animals", "Animale (Natural): ");
-            dict.put("gui.flags.spawner_animals", "Animale (Spawner): ");
-            dict.put("gui.flags.natural_monsters", "Monstri (Natural): ");
-            dict.put("gui.flags.spawner_monsters", "Monstri (Spawner): ");
+            dict.put("gui.flags.natural_animals", "Spawn Animale Natural: ");
+            dict.put("gui.flags.spawner_animals", "Spawn Animale Spawner: ");
+            dict.put("gui.flags.natural_monsters", "Spawn Monstri Natural: ");
+            dict.put("gui.flags.spawner_monsters", "Spawn Monstri Spawner: ");
+            dict.put("gui.flags.always_middle_day", "Mereu Miezul Zilei: ");
+            dict.put("gui.flags.always_middle_night", "Mereu Miezul Noptii: ");
+            dict.put("gui.flags.always_shiny", "Mereu Senin: ");
+            dict.put("gui.flags.always_rain", "Mereu Ploaie: ");
 
             // Delete & Admin
             dict.put("gui.delete.title", "§c§lSTERGE O PROTECTIE");

@@ -12,6 +12,7 @@ import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 
 import org.evocraft.evoprotection.commands.ClaimCommand;
 import org.evocraft.evoprotection.events.ProtectionEvents;
+import org.evocraft.evoprotection.manager.ClaimEnvironmentManager;
 import org.evocraft.evoprotection.manager.ClaimManager;
 import org.evocraft.evoprotection.network.PacketHandler;
 import org.evocraft.evoprotection.manager.ProtectionConfig;
@@ -53,6 +54,7 @@ public class EvoProtection {
 
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
+        ClaimEnvironmentManager.get().clearRuntime(event.getServer());
         if (ClaimManager.get() != null) ClaimManager.get().save();
     }
 }
