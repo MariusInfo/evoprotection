@@ -1302,7 +1302,7 @@ public class ClaimManager {
             PacketHandler.sendToPlayer(new PacketHandler.S2C_SyncClaimData(GSON.toJson(data), isAdminMap), player);
         } catch (Exception e) {
             e.printStackTrace();
-            player.sendSystemMessage(Component.literal("§c[Eroare] Harta a întâmpinat o problemă internă, dar serverul a fost protejat!"));
+            player.sendSystemMessage(Component.literal("§c[Error] The map encountered an internal problem, but the server was protected!"));
         }
     }
 

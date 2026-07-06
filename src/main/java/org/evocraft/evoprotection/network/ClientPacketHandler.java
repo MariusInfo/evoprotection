@@ -7,6 +7,7 @@ import org.evocraft.evoprotection.gui.AdminClaimMapScreen;
 import org.evocraft.evoprotection.gui.ClaimMapScreen;
 import org.evocraft.evoprotection.gui.DeleteClaimScreen;
 import org.evocraft.evoprotection.gui.FlagScreen;
+import org.evocraft.evoprotection.gui.RoomOfferScreen;
 import org.evocraft.evoprotection.gui.TrustScreen;
 import org.evocraft.evoprotection.manager.LanguageManager;
 
@@ -27,6 +28,11 @@ public class ClientPacketHandler {
 
     public static void handleEnvironmentOverride(int timeMode, int weatherMode, long serverDayTime, boolean serverRaining, float serverRainLevel, float serverThunderLevel) {
         ClientEnvironmentManager.setOverride(timeMode, weatherMode, serverDayTime, serverRaining, serverRainLevel, serverThunderLevel);
+    }
+
+    public static void handleOpenRoomOffer(String roomId, String roomName, double buyPrice, double rentPrice,
+                                           int mode, boolean canBuy, boolean canRent) {
+        Minecraft.getInstance().setScreen(new RoomOfferScreen(roomId, roomName, buyPrice, rentPrice, mode, canBuy, canRent));
     }
 
     public static void handleSyncClaimData(String jsonMapData, boolean isAdminMap) {

@@ -15,6 +15,7 @@ import org.evocraft.evoprotection.EvoProtection;
 import org.evocraft.evoprotection.manager.ClaimEnvironmentManager;
 import org.evocraft.evoprotection.manager.ClaimManager;
 import org.evocraft.evoprotection.manager.LanguageManager;
+import org.evocraft.evoprotection.manager.ProtectionRoomManager;
 
 import java.util.UUID;
 import java.util.function.Supplier;
@@ -43,6 +44,8 @@ public class PacketHandler {
 
         INSTANCE.registerMessage(nextId(), S2C_SyncLanguage.class, S2C_SyncLanguage::toBytes, S2C_SyncLanguage::new, S2C_SyncLanguage::handle);
         INSTANCE.registerMessage(nextId(), S2C_EnvironmentOverride.class, S2C_EnvironmentOverride::toBytes, S2C_EnvironmentOverride::new, S2C_EnvironmentOverride::handle);
+        INSTANCE.registerMessage(nextId(), S2C_OpenRoomOffer.class, S2C_OpenRoomOffer::toBytes, S2C_OpenRoomOffer::new, S2C_OpenRoomOffer::handle);
+        INSTANCE.registerMessage(nextId(), C2S_RoomOfferChoice.class, C2S_RoomOfferChoice::toBytes, C2S_RoomOfferChoice::new, C2S_RoomOfferChoice::handle);
     }
 
     public static <MSG> void sendToPlayer(MSG message, ServerPlayer player) {
@@ -158,6 +161,97 @@ public class PacketHandler {
             ctx.get().enqueueWork(() -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> ClientPacketHandler.handleEnvironmentOverride(timeMode, weatherMode, serverDayTime, serverRaining, serverRainLevel, serverThunderLevel)));
             ctx.get().setPacketHandled(true);
             return true;
+        }
+    }
+
+    public static class S2C_OpenRoomOffer {
+        public final String roomId;
+        public final String roomName;
+        public final double buyPrice;
+        public final double rentPrice;
+        public final int mode;
+        public final boolean canBuy;
+        public final boolean canRent;
+
+        public static final int MODE_OFFER = 0;
+        public static final int MODE_MANAGE_RENT = 1;
+        public static final int MODE_MANAGE_BOUGHT = 2;
+
+        public S2C_OpenRoomOffer(String roomId, String roomName, double buyPrice, double rentPrice,
+                                 int mode, boolean canBuy, boolean canRent) {
+            this.roomId = roomId == null ? "" : roomId;
+            this.roomName = roomName == null ? "" : roomName;
+            this.buyPrice = buyPrice;
+            this.rentPrice = rentPrice;
+            this.mode = mode;
+            this.canBuy = canBuy;
+            this.canRent = canRent;
+        }
+
+        public S2C_OpenRoomOffer(FriendlyByteBuf buf) {
+            this.roomId = buf.readUtf(80);
+            this.roomName = buf.readUtf(80);
+            this.buyPrice = buf.readDouble();
+            this.rentPrice = buf.readDouble();
+            this.mode = buf.readInt();
+            this.canBuy = buf.readBoolean();
+            this.canRent = buf.readBoolean();
+        }
+
+        public void toBytes(FriendlyByteBuf buf) {
+            buf.writeUtf(roomId, 80);
+            buf.writeUtf(roomName, 80);
+            buf.writeDouble(buyPrice);
+            buf.writeDouble(rentPrice);
+            buf.writeInt(mode);
+            buf.writeBoolean(canBuy);
+            buf.writeBoolean(canRent);
+        }
+
+        public boolean handle(Supplier<NetworkEvent.Context> ctx) {
+            ctx.get().enqueueWork(() -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () ->
+                    ClientPacketHandler.handleOpenRoomOffer(roomId, roomName, buyPrice, rentPrice, mode, canBuy, canRent)));
+            ctx.get().setPacketHandled(true);
+            return true;
+        }
+    }
+
+    public static class C2S_RoomOfferChoice {
+        public final String roomId;
+        public final ProtectionRoomManager.RoomOfferAction action;
+
+        public C2S_RoomOfferChoice(String roomId, ProtectionRoomManager.RoomOfferAction action) {
+            this.roomId = roomId == null ? "" : roomId;
+            this.action = action == null ? ProtectionRoomManager.RoomOfferAction.BUY : action;
+        }
+
+        public C2S_RoomOfferChoice(FriendlyByteBuf buf) {
+            this.roomId = buf.readUtf(80);
+            this.action = readAction(buf.readUtf(32));
+        }
+
+        public void toBytes(FriendlyByteBuf buf) {
+            buf.writeUtf(roomId, 80);
+            buf.writeUtf(action.name(), 32);
+        }
+
+        public boolean handle(Supplier<NetworkEvent.Context> ctx) {
+            ctx.get().enqueueWork(() -> {
+                ServerPlayer player = ctx.get().getSender();
+                if (player != null) {
+                    ProtectionRoomManager.get().handleRoomOfferAction(player, roomId, action);
+                }
+            });
+            ctx.get().setPacketHandled(true);
+            return true;
+        }
+
+        private ProtectionRoomManager.RoomOfferAction readAction(String value) {
+            try {
+                return ProtectionRoomManager.RoomOfferAction.valueOf(value);
+            } catch (Exception ignored) {
+                return ProtectionRoomManager.RoomOfferAction.BUY;
+            }
         }
     }
 
@@ -306,7 +400,7 @@ public class PacketHandler {
                     UUID targetUUID = adminAction ? new UUID(0, 0) : ClaimManager.get().getClaimOwner(claimName);
                     if (targetUUID == null) return;
                     if (!adminAction && !ClaimManager.get().canEditFlag(targetUUID, player.getUUID(), claimName, flagName)) {
-                        player.sendSystemMessage(Component.literal("§cNu ai permisiunea sa schimbi acest flag pentru rolul tau."));
+                        player.sendSystemMessage(Component.literal("§cYou do not have permission to change this flag for your role."));
                         return;
                     }
                     if (!ClaimManager.get().setFlag(targetUUID, claimName, flagName, state)) return;

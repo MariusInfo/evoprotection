@@ -13,6 +13,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.levelgen.Heightmap;
 import org.evocraft.evocore.client.ClientBalanceData;
+import org.evocraft.evocore.util.EvoCurrencyFormatter;
 import org.evocraft.evoprotection.manager.ClaimManager;
 import org.evocraft.evoprotection.manager.LanguageManager;
 import org.evocraft.evoprotection.network.PacketHandler;
@@ -262,9 +263,9 @@ public class ClaimMapScreen extends Screen {
             g.drawString(this.font, LanguageManager.get("gui.map.info"), infoX, infoY, 0xFFFFFF, false);
             if (cachedData != null) {
                 g.drawString(this.font, limitText + " §f" + cachedData.usedSlots + " / " + cachedData.maxSlots, infoX, infoY + 25, 0xAAAAAA, false);
-                String bal = String.format("%,.0f", ClientBalanceData.getBalance());
+                String bal = EvoCurrencyFormatter.formatWithCurrency(ClientBalanceData.getBalance());
                 g.drawString(this.font, LanguageManager.get("gui.map.money", bal), infoX, infoY + 45, 0xAAAAAA, false);
-                g.drawString(this.font, LanguageManager.get("gui.map.price", (int)cachedData.nextSlotCost), infoX, infoY + 65, 0xAAAAAA, false);
+                g.drawString(this.font, LanguageManager.get("gui.map.price", EvoCurrencyFormatter.formatWithCurrency(cachedData.nextSlotCost)), infoX, infoY + 65, 0xAAAAAA, false);
             }
             g.drawString(this.font, LanguageManager.get("gui.map.click_info"), infoX, infoY + 110, 0xAAAAAA, false);
             g.drawString(this.font, isPlot ? LanguageManager.get("gui.map.click_plot") : LanguageManager.get("gui.map.click_chunk"), infoX, infoY + 125, 0xAAAAAA, false);

@@ -33,9 +33,11 @@ import net.minecraft.resources.ResourceLocation;
 import org.evocraft.evoprotection.EvoProtection;
 import org.evocraft.evoprotection.manager.ClaimEnvironmentManager;
 import org.evocraft.evoprotection.manager.ClaimManager;
+import org.evocraft.evoprotection.manager.ProtectionRoomManager;
 import org.evocraft.evoprotection.network.PacketHandler;
 import org.evocraft.evoprotection.manager.ProtectionConfig;
 import org.evocraft.evocore.data.EconomyManager;
+import org.evocraft.evocore.util.EvoCurrencyFormatter;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -233,6 +235,20 @@ public class ProtectionEvents {
             net.minecraft.world.entity.Entity target = event.getTarget();
             String dim = attacker.level().dimension().location().toString();
 
+            ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(target.blockPosition(), dim);
+            if (room != null) {
+                if (target instanceof Player) {
+                    event.setCanceled(true);
+                    sendMsg(attacker);
+                    return;
+                }
+                if (!ProtectionRoomManager.get().canPlayerAccessRoom(attacker, room)) {
+                    event.setCanceled(true);
+                    sendMsg(attacker);
+                }
+                return;
+            }
+
             if (target instanceof Player) {
                 ChunkPos attackerChunk = attacker.chunkPosition();
                 ChunkPos targetChunk = new ChunkPos(target.blockPosition());
@@ -332,6 +348,12 @@ public class ProtectionEvents {
     // ==========================================
 
     @SubscribeEvent
+    public static void onServerTick(TickEvent.ServerTickEvent event) {
+        if (event.phase != TickEvent.Phase.END) return;
+        ProtectionRoomManager.get().tickRentPayments(event.getServer());
+    }
+
+    @SubscribeEvent
     public static void onPlayerMove(TickEvent.PlayerTickEvent event) {
         if (event.phase != TickEvent.Phase.END || event.player.level().isClientSide()) return;
 
@@ -367,7 +389,7 @@ public class ProtectionEvents {
                         activity.activeTicks = 0; // RESET ONLY AFTER RECEIVING THE MONEY
                         try {
                             EconomyManager.get().addBalance(player.getUUID(), REWARD_AMOUNT);
-                            player.sendSystemMessage(Component.literal("§8[§aPayDay§8] §fYou received §e" + REWARD_AMOUNT + " Lei §ffor your activity!"));
+                            player.sendSystemMessage(Component.literal("§8[§aPayDay§8] §fYou received §e" + EvoCurrencyFormatter.formatWithCurrency(REWARD_AMOUNT) + " §ffor your activity!"));
                         } catch (Exception e) {}
                     }
                 } else if (activity.afkTicks == AFK_THRESHOLD_TICKS) {
@@ -515,6 +537,14 @@ public class ProtectionEvents {
             String dim = player.level().dimension().location().toString();
             UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dim);
 
+            ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(event.getItem().blockPosition(), dim);
+            if (room != null) {
+                if (!ProtectionRoomManager.get().canPlayerAccessRoom(player, room)) {
+                    event.setCanceled(true);
+                }
+                return;
+            }
+
             if (owner != null && !owner.equals(player.getUUID()) && !player.hasPermissions(2)) {
                 String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
                 if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) {
@@ -607,6 +637,13 @@ public class ProtectionEvents {
     @SubscribeEvent(priority = EventPriority.HIGHEST)
     public static void onRightClickItem(PlayerInteractEvent.RightClickItem event) {
         if (event.getEntity() instanceof ServerPlayer player) {
+            if (ProtectionRoomManager.get().isRoomContract(event.getItemStack())) {
+                ProtectionRoomManager.get().redeemContract(player, event.getItemStack());
+                event.setCanceled(true);
+                event.setResult(Event.Result.DENY);
+                return;
+            }
+
             if (player.hasPermissions(2)) return;
 
             if (isForbiddenItem(event.getItemStack())) {
@@ -623,6 +660,13 @@ public class ProtectionEvents {
     @SubscribeEvent(priority = EventPriority.HIGHEST)
     public static void onBlockBreak(BlockEvent.BreakEvent event) {
         if (event.getPlayer() instanceof ServerPlayer player) {
+            String dim = player.level().dimension().location().toString();
+            if (ProtectionRoomManager.get().isRoomSign(event.getPos(), dim) && !player.hasPermissions(2)) {
+                event.setCanceled(true);
+                sendMsg(player, "\u00A7c[!] You cannot break this room sign.");
+                return;
+            }
+
             if (!canInteract(player, event.getPos(), false, event.getLevel().getBlockState(event.getPos()))) {
                 event.setCanceled(true);
                 sendMsg(player);
@@ -660,6 +704,29 @@ public class ProtectionEvents {
             ChunkPos chunkPos = new ChunkPos(pos);
             String dim = player.level().dimension().location().toString();
             UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dim);
+
+            if (ProtectionRoomManager.get().handleRoomSignInteract(player, pos)) {
+                event.setCanceled(true);
+                event.setUseBlock(Event.Result.DENY);
+                event.setUseItem(Event.Result.DENY);
+                return;
+            }
+
+            if (player.getMainHandItem().isEmpty()
+                    && ProtectionRoomManager.get().handlePendingRoomSignPlacement(player, pos, event.getFace())) {
+                event.setCanceled(true);
+                event.setUseBlock(Event.Result.DENY);
+                event.setUseItem(Event.Result.DENY);
+                return;
+            }
+
+            if (ProtectionRoomManager.get().isRoomContract(event.getItemStack())) {
+                ProtectionRoomManager.get().redeemContract(player, event.getItemStack());
+                event.setCanceled(true);
+                event.setUseBlock(Event.Result.DENY);
+                event.setUseItem(Event.Result.DENY);
+                return;
+            }
 
             // THE ULTIMATE MOWZIE'S MOBS BARRIER (TOTALLY STOPS THE PHYSICAL CLICK EVENT)
             if (isForbiddenItem(player.getMainHandItem()) || isForbiddenItem(player.getOffhandItem())) {
@@ -736,6 +803,16 @@ public class ProtectionEvents {
             String dim = player.level().dimension().location().toString();
             UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dim);
 
+            ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(event.getTarget().blockPosition(), dim);
+            if (room != null) {
+                if (!ProtectionRoomManager.get().canPlayerAccessRoom(player, room)) {
+                    event.setCanceled(true);
+                    event.setResult(Event.Result.DENY);
+                    sendMsg(player);
+                }
+                return;
+            }
+
             if (isForbiddenItem(player.getMainHandItem()) || isForbiddenItem(player.getOffhandItem())) {
                 if (!canUseMowzieItemAt(player, chunkPos)) {
                     event.setCanceled(true);
@@ -775,6 +852,16 @@ public class ProtectionEvents {
             ChunkPos chunkPos = new ChunkPos(event.getTarget().blockPosition());
             String dim = player.level().dimension().location().toString();
             UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dim);
+
+            ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(event.getTarget().blockPosition(), dim);
+            if (room != null) {
+                if (!ProtectionRoomManager.get().canPlayerAccessRoom(player, room)) {
+                    event.setCanceled(true);
+                    event.setResult(Event.Result.DENY);
+                    sendMsg(player);
+                }
+                return;
+            }
 
             if (isForbiddenItem(player.getMainHandItem()) || isForbiddenItem(player.getOffhandItem())) {
                 if (!canUseMowzieItemAt(player, chunkPos)) {
@@ -855,6 +942,12 @@ public class ProtectionEvents {
         }
 
         if (owner == null) return true;
+
+        ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(pos, dim);
+        if (room != null) {
+            return ProtectionRoomManager.get().canPlayerAccessRoom(player, room);
+        }
+
         if (owner.equals(player.getUUID())) return true;
 
         if (owner.getMostSignificantBits() == 0 && owner.getLeastSignificantBits() == 0) {

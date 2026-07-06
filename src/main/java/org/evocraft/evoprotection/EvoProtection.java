@@ -12,11 +12,13 @@ import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 
 import org.evocraft.evoprotection.commands.ClaimCommand;
 import org.evocraft.evoprotection.events.ProtectionEvents;
+import org.evocraft.evoprotection.item.ModItems;
 import org.evocraft.evoprotection.manager.ClaimEnvironmentManager;
 import org.evocraft.evoprotection.manager.ClaimManager;
 import org.evocraft.evoprotection.network.PacketHandler;
 import org.evocraft.evoprotection.manager.ProtectionConfig;
 import org.evocraft.evoprotection.manager.LanguageManager;
+import org.evocraft.evoprotection.manager.ProtectionRoomManager;
 
 @Mod(EvoProtection.MODID)
 public class EvoProtection {
@@ -25,6 +27,7 @@ public class EvoProtection {
     public EvoProtection() {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
 
+        ModItems.register(modEventBus);
         modEventBus.addListener((FMLCommonSetupEvent event) -> setup(event));
 
         MinecraftForge.EVENT_BUS.register(this);
@@ -50,11 +53,13 @@ public class EvoProtection {
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
         ClaimManager.initialize();
+        ProtectionRoomManager.initialize();
     }
 
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
         ClaimEnvironmentManager.get().clearRuntime(event.getServer());
         if (ClaimManager.get() != null) ClaimManager.get().save();
+        if (ProtectionRoomManager.get() != null) ProtectionRoomManager.get().save();
     }
 }
