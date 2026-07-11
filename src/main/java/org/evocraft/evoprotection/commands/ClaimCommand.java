@@ -57,10 +57,10 @@ public class ClaimCommand {
                 .then(Commands.literal("unadmin").executes(ctx -> {
                     ServerPlayer p = ctx.getSource().getPlayerOrException();
                     if (ClaimManager.get().removeAnyClaim(p.chunkPosition(), p.level().dimension().location().toString())) {
-                        p.sendSystemMessage(Component.literal("§a[Admin] Protecție ștearsă din acest chunk!"));
+                        p.sendSystemMessage(Component.literal("§a[Admin] Protection removed from this chunk!"));
                         ClaimManager.get().syncToClient(p);
                     } else {
-                        p.sendSystemMessage(Component.literal("§cNu există protecție aici."));
+                        p.sendSystemMessage(Component.literal("§cThere is no protection here."));
                     }
                     return 1;
                 }))

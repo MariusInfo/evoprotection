@@ -29,11 +29,11 @@ public class ChunkNotificationHandler {
 
         if (ownerName.equals("Wilderness")) {
             newMessage = "Wilderness";
-            newSub = "Teritoriu Liber (Fără protecție)";
+            newSub = "Free Territory (No Protection)";
             wild = true;
         } else {
             newMessage = ownerName;
-            newSub = "Zonă Protejată";
+            newSub = "Protected Area";
         }
 
         if (displayMessage.equals(newMessage)) return;

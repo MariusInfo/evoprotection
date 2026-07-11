@@ -50,7 +50,7 @@ public class PayDayOverlay {
         // Timpul Jos
         String status;
         if (ClientPayDayData.isIdle) {
-            status = "§e§lPAUZĂ";
+            status = "§e§lPAUSED";
         } else {
             status = "§a" + formatTime(ClientPayDayData.secondsLeft);
         }

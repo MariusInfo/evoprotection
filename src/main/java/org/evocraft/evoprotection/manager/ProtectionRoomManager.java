@@ -235,6 +235,19 @@ public class ProtectionRoomManager {
             return true;
         }
 
+        if (room.sellerUuid != null && room.sellerUuid.equals(player.getUUID())) {
+            PacketHandler.sendToPlayer(new PacketHandler.S2C_OpenRoomOffer(
+                    room.roomId,
+                    room.name,
+                    room.buyPrice,
+                    room.rentPrice,
+                    PacketHandler.S2C_OpenRoomOffer.MODE_MANAGE_BOUGHT,
+                    false,
+                    false
+            ), player);
+            return true;
+        }
+
         PacketHandler.sendToPlayer(new PacketHandler.S2C_OpenRoomOffer(
                 room.roomId,
                 room.name,
@@ -247,7 +260,7 @@ public class ProtectionRoomManager {
         return true;
     }
 
-    public boolean handleRoomOfferAction(ServerPlayer player, String roomId, RoomOfferAction action) {
+    public boolean handleRoomOfferAction(ServerPlayer player, String roomId, RoomOfferAction action, double requestedPrice) {
         ProtectionRoom room = rooms.get(roomId);
         if (room == null) {
             player.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] This room sign is no longer valid."));
@@ -258,8 +271,8 @@ public class ProtectionRoomManager {
             case BUY -> claimRoomFromSign(player, room, RoomOfferType.SELL);
             case RENT -> claimRoomFromSign(player, room, RoomOfferType.RENT);
             case CANCEL_RENT -> cancelRent(player, room);
-            case LIST_SELL -> listBoughtRoom(player, room, RoomListingMode.SELL_ONLY);
-            case LIST_RENT -> listBoughtRoom(player, room, RoomListingMode.RENT_ONLY);
+            case LIST_SELL -> listBoughtRoom(player, room, RoomListingMode.SELL_ONLY, requestedPrice);
+            case LIST_RENT -> listBoughtRoom(player, room, RoomListingMode.RENT_ONLY, requestedPrice);
         };
     }
 
@@ -293,9 +306,12 @@ public class ProtectionRoomManager {
             return false;
         }
 
+        UUID previousSellerUuid = room.sellerUuid;
+        String previousSellerName = room.sellerName;
+
         if (price > 0.0D) {
             EconomyManager.get().removeBalance(buyer.getUUID(), price);
-            EconomyManager.get().addBalance(room.sellerUuid, price);
+            EconomyManager.get().addBalance(previousSellerUuid, price);
         }
 
         room.ownerUuid = buyer.getUUID();
@@ -304,6 +320,10 @@ public class ProtectionRoomManager {
         room.price = price;
         room.contractToken = "";
         room.lastRentChargeAt = choice == RoomOfferType.RENT ? System.currentTimeMillis() : 0L;
+        if (choice == RoomOfferType.SELL) {
+            room.sellerUuid = buyer.getUUID();
+            room.sellerName = buyer.getGameProfile().getName();
+        }
         room.updatedAt = System.currentTimeMillis();
         saveRoom(room);
         updateRoomSign(room);
@@ -312,12 +332,14 @@ public class ProtectionRoomManager {
                 + (choice == RoomOfferType.RENT ? "rented " : "bought ")
                 + "\u00A7e" + room.name + "\u00A7a for \u00A7e" + EvoCurrencyFormatter.formatWithCurrency(price) + "\u00A7a."));
 
-        ServerPlayer seller = buyer.getServer() == null ? null : buyer.getServer().getPlayerList().getPlayer(room.sellerUuid);
+        ServerPlayer seller = buyer.getServer() == null ? null : buyer.getServer().getPlayerList().getPlayer(previousSellerUuid);
         if (seller != null) {
             seller.sendSystemMessage(Component.literal("\u00A7a[EvoProtection] \u00A7e"
                     + buyer.getGameProfile().getName() + "\u00A7a "
                     + (choice == RoomOfferType.RENT ? "rented " : "bought ")
                     + "\u00A7e" + room.name + "\u00A7a for \u00A7e" + EvoCurrencyFormatter.formatWithCurrency(price) + "\u00A7a."));
+        } else if (previousSellerName != null && choice == RoomOfferType.SELL) {
+            // Seller balance is updated even when offline; this keeps notification best-effort only.
         }
         return true;
     }
@@ -336,22 +358,24 @@ public class ProtectionRoomManager {
         updateRoomSign(room);
 
         player.sendSystemMessage(Component.literal("\u00A7a[EvoProtection] Rent cancelled for \u00A7e" + roomName + "\u00A7a."));
+        player.sendSystemMessage(Component.literal("\u00A77The room returned to \u00A7f" + room.sellerName + "\u00A77."));
         return true;
     }
 
-    private boolean listBoughtRoom(ServerPlayer player, ProtectionRoom room, RoomListingMode listingMode) {
-        if (room.ownerUuid == null || !room.ownerUuid.equals(player.getUUID()) || room.offerType != RoomOfferType.SELL) {
-            player.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] You must own this bought room to list it."));
+    private boolean listBoughtRoom(ServerPlayer player, ProtectionRoom room, RoomListingMode listingMode, double requestedPrice) {
+        boolean ownsBoughtRoom = room.ownerUuid != null
+                && room.ownerUuid.equals(player.getUUID())
+                && room.offerType == RoomOfferType.SELL;
+        boolean managesAvailableRoom = room.ownerUuid == null
+                && room.sellerUuid != null
+                && room.sellerUuid.equals(player.getUUID());
+        if (!ownsBoughtRoom && !managesAvailableRoom) {
+            player.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] You must own this room to list it."));
             return false;
         }
 
-        if (listingMode == RoomListingMode.SELL_ONLY && room.buyPrice < 0.0D) {
-            player.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] This room has no sale price configured."));
-            return false;
-        }
-
-        if (listingMode == RoomListingMode.RENT_ONLY && room.rentPrice < 0.0D) {
-            player.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] This room has no rent price configured."));
+        if (!Double.isFinite(requestedPrice) || requestedPrice < 0.0D) {
+            player.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] Enter a valid price."));
             return false;
         }
 
@@ -359,14 +383,21 @@ public class ProtectionRoomManager {
         room.sellerName = player.getGameProfile().getName();
         clearRoomOwner(room);
         room.listingMode = listingMode;
-        room.price = listingMode == RoomListingMode.RENT_ONLY ? room.rentPrice : room.buyPrice;
+        if (listingMode == RoomListingMode.RENT_ONLY) {
+            room.rentPrice = requestedPrice;
+            room.price = requestedPrice;
+        } else {
+            room.buyPrice = requestedPrice;
+            room.price = requestedPrice;
+        }
         room.lastRentChargeAt = 0L;
         room.updatedAt = System.currentTimeMillis();
         saveRoom(room);
         updateRoomSign(room);
 
         player.sendSystemMessage(Component.literal("\u00A7a[EvoProtection] Room listed for "
-                + (listingMode == RoomListingMode.RENT_ONLY ? "rent" : "sale") + "."));
+                + (listingMode == RoomListingMode.RENT_ONLY ? "rent" : "sale")
+                + " at \u00A7e" + EvoCurrencyFormatter.formatWithCurrency(requestedPrice) + "\u00A7a."));
         return true;
     }
 
@@ -425,20 +456,26 @@ public class ProtectionRoomManager {
             return false;
         }
 
+        UUID previousSellerUuid = room.sellerUuid;
+
         if (room.price > 0.0D) {
             EconomyManager.get().removeBalance(buyer.getUUID(), room.price);
-            EconomyManager.get().addBalance(room.sellerUuid, room.price);
+            EconomyManager.get().addBalance(previousSellerUuid, room.price);
         }
 
         room.ownerUuid = buyer.getUUID();
         room.ownerName = buyer.getGameProfile().getName();
+        if (room.offerType == RoomOfferType.SELL) {
+            room.sellerUuid = buyer.getUUID();
+            room.sellerName = buyer.getGameProfile().getName();
+        }
         room.contractToken = "";
         room.updatedAt = System.currentTimeMillis();
         saveRoom(room);
         stack.shrink(1);
 
         buyer.sendSystemMessage(Component.literal("\u00A7a[EvoProtection] You now own room \u00A7e" + room.name + "\u00A7a."));
-        ServerPlayer seller = buyer.getServer() == null ? null : buyer.getServer().getPlayerList().getPlayer(room.sellerUuid);
+        ServerPlayer seller = buyer.getServer() == null ? null : buyer.getServer().getPlayerList().getPlayer(previousSellerUuid);
         if (seller != null) {
             seller.sendSystemMessage(Component.literal("\u00A7a[EvoProtection] \u00A7e" + buyer.getGameProfile().getName() + "\u00A7a claimed \u00A7e" + room.name + "\u00A7a for \u00A7e" + EvoCurrencyFormatter.formatWithCurrency(room.price) + "\u00A7a."));
         }

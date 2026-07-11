@@ -7,7 +7,9 @@ import net.minecraftforge.fml.loading.FMLPaths;
 
 import java.io.*;
 import java.lang.reflect.Type;
+import java.text.Normalizer;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 
 public class LanguageManager {
@@ -18,7 +20,7 @@ public class LanguageManager {
     private static final Map<String, Map<String, String>> dicts = new HashMap<>();
 
     // Limba locala a clientului pentru interfetele grafice
-    public static String clientLang = "ro";
+    public static String clientLang = "en";
 
     public static void load() {
         if (!DIR.exists()) {
@@ -101,9 +103,34 @@ public class LanguageManager {
 
     private static boolean shouldRefreshValue(String key, String value) {
         if (value == null) return true;
-        if (key.startsWith("gui.map.") && (value.contains("Lei") || value.contains("Banii tai") || value.contains("Pret Upgrade"))) return true;
-        if (key.startsWith("msg.") && (value.contains("Ai ") || value.contains("Nu ai") || value.contains("cumparat") || value.contains("Protectii"))) return true;
-        if (key.startsWith("gui.") && (value.contains("Cumpara") || value.contains("Prieteni") || value.contains("Setari") || value.contains("Sterge"))) return true;
+        if (!key.startsWith("gui.") && !key.startsWith("msg.")) return false;
+        return containsLegacyRomanian(value);
+    }
+
+    private static boolean containsLegacyRomanian(String value) {
+        String normalized = Normalizer.normalize(value, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .toLowerCase(Locale.ROOT);
+
+        String[] legacyMarkers = {
+                "prieteni", "prieten", "adauga", "permisiune", "plot selectat",
+                "inapoi la harta", "setari protectie", "protectie", "oprit", "pornit",
+                "explozii", "usi", "porti", "cufere", "forje", "blocuri utile",
+                "construire publica", "interactiune sateni", "colectare iteme",
+                "ucidere animale", "animale (natural)", "animale (spawner)", "monstri",
+                "mereu miezul zilei", "mereu miezul noptii", "mereu senin",
+                "mereu ploaie", "informatii teren", "limita chunk", "sau sterge",
+                "teren detinut", "banii tai", "pret upgrade", "click pe harta",
+                "cumpara", "sterge", "nu ai", "ai cumparat", "ai vandut",
+                "protectii", "zona", "limita", "modifici", "flag-urile",
+                "permisiuni", "vizitator"
+        };
+
+        for (String marker : legacyMarkers) {
+            if (normalized.contains(marker)) {
+                return true;
+            }
+        }
         return false;
     }
 
@@ -244,7 +271,7 @@ public class LanguageManager {
             dict.put("gui.map.limit_chunk", "Chunks Limit:");
             dict.put("gui.map.money", "Your Balance: §e%s");
             dict.put("gui.map.price", "Slot Upgrade Price: §c%s");
-            dict.put("gui.map.click_info", "§7Click pe harta pentru a:");
+            dict.put("gui.map.click_info", "§7Click on the map to:");
             dict.put("gui.map.click_plot", "§7Buy a new Plot");
             dict.put("gui.map.click_chunk", "§7Buy selected Chunk");
             dict.put("gui.map.click_delete", "§7Or delete owned land");

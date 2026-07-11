@@ -219,27 +219,31 @@ public class PacketHandler {
     public static class C2S_RoomOfferChoice {
         public final String roomId;
         public final ProtectionRoomManager.RoomOfferAction action;
+        public final double requestedPrice;
 
-        public C2S_RoomOfferChoice(String roomId, ProtectionRoomManager.RoomOfferAction action) {
+        public C2S_RoomOfferChoice(String roomId, ProtectionRoomManager.RoomOfferAction action, double requestedPrice) {
             this.roomId = roomId == null ? "" : roomId;
             this.action = action == null ? ProtectionRoomManager.RoomOfferAction.BUY : action;
+            this.requestedPrice = requestedPrice;
         }
 
         public C2S_RoomOfferChoice(FriendlyByteBuf buf) {
             this.roomId = buf.readUtf(80);
             this.action = readAction(buf.readUtf(32));
+            this.requestedPrice = buf.readDouble();
         }
 
         public void toBytes(FriendlyByteBuf buf) {
             buf.writeUtf(roomId, 80);
             buf.writeUtf(action.name(), 32);
+            buf.writeDouble(requestedPrice);
         }
 
         public boolean handle(Supplier<NetworkEvent.Context> ctx) {
             ctx.get().enqueueWork(() -> {
                 ServerPlayer player = ctx.get().getSender();
                 if (player != null) {
-                    ProtectionRoomManager.get().handleRoomOfferAction(player, roomId, action);
+                    ProtectionRoomManager.get().handleRoomOfferAction(player, roomId, action, requestedPrice);
                 }
             });
             ctx.get().setPacketHandled(true);

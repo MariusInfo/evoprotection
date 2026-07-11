@@ -2,6 +2,7 @@ package org.evocraft.evoprotection.gui;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.network.chat.Component;
@@ -27,6 +28,8 @@ public class RoomOfferScreen extends Screen {
     private final int mode;
     private final boolean canBuy;
     private final boolean canRent;
+    private EditBox salePriceBox;
+    private EditBox rentPriceBox;
 
     public RoomOfferScreen(String roomId, String roomName, double buyPrice, double rentPrice,
                            int mode, boolean canBuy, boolean canRent) {
@@ -46,11 +49,37 @@ public class RoomOfferScreen extends Screen {
     }
 
     @Override
+    protected void init() {
+        int w = 270;
+        int h = screenHeight();
+        int x = (width - w) / 2;
+        int y = (height - h) / 2;
+
+        salePriceBox = new EditBox(font, x + 34, y + 91, 108, 18, Component.literal("Sale price"));
+        salePriceBox.setMaxLength(15);
+        salePriceBox.setFilter(this::isPriceText);
+        salePriceBox.setValue(initialPrice(buyPrice));
+
+        rentPriceBox = new EditBox(font, x + 34, y + 129, 108, 18, Component.literal("Rent price"));
+        rentPriceBox.setMaxLength(15);
+        rentPriceBox.setFilter(this::isPriceText);
+        rentPriceBox.setValue(initialPrice(rentPrice));
+
+        boolean manageBought = mode == PacketHandler.S2C_OpenRoomOffer.MODE_MANAGE_BOUGHT;
+        salePriceBox.visible = manageBought;
+        salePriceBox.active = manageBought;
+        rentPriceBox.visible = manageBought;
+        rentPriceBox.active = manageBought;
+        addRenderableWidget(salePriceBox);
+        addRenderableWidget(rentPriceBox);
+    }
+
+    @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         renderBackground(graphics);
 
         int w = 270;
-        int h = 150;
+        int h = screenHeight();
         int x = (width - w) / 2;
         int y = (height - h) / 2;
 
@@ -68,10 +97,12 @@ public class RoomOfferScreen extends Screen {
             drawButton(graphics, cancel, "CANCEL RENT", true, cancel.contains(mouseX, mouseY));
             graphics.drawCenteredString(font, "Stops future 24h payments", x + w / 2, cancel.y + 31, WARN);
         } else if (mode == PacketHandler.S2C_OpenRoomOffer.MODE_MANAGE_BOUGHT) {
-            drawButton(graphics, buy, "SELL", buyPrice >= 0.0D, buy.contains(mouseX, mouseY));
-            drawButton(graphics, rent, "RENT", rentPrice >= 0.0D, rent.contains(mouseX, mouseY));
-            graphics.drawCenteredString(font, formatPrice(buyPrice), buy.x + buy.w / 2, buy.y + 31, WARN);
-            graphics.drawCenteredString(font, formatPrice(rentPrice), rent.x + rent.w / 2, rent.y + 31, WARN);
+            Rect listSale = listSaleButton(x, y);
+            Rect listRent = listRentButton(x, y);
+            graphics.drawString(font, "Sale price", x + 34, y + 80, MUTED, false);
+            graphics.drawString(font, "Rent / 24h", x + 34, y + 118, MUTED, false);
+            drawButton(graphics, listSale, "SET SALE", true, listSale.contains(mouseX, mouseY));
+            drawButton(graphics, listRent, "SET RENT", true, listRent.contains(mouseX, mouseY));
         } else {
             drawButton(graphics, buy, "BUY", canBuy, buy.contains(mouseX, mouseY));
             drawButton(graphics, rent, "RENT", canRent, rent.contains(mouseX, mouseY));
@@ -87,46 +118,52 @@ public class RoomOfferScreen extends Screen {
         if (button != 0) return super.mouseClicked(mouseX, mouseY, button);
 
         int w = 270;
-        int h = 150;
+        int h = screenHeight();
         int x = (width - w) / 2;
         int y = (height - h) / 2;
 
         if (mode == PacketHandler.S2C_OpenRoomOffer.MODE_MANAGE_RENT) {
             Rect cancel = new Rect(x + 68, y + 82, 134, 25);
             if (cancel.contains(mouseX, mouseY)) {
-                sendAction(ProtectionRoomManager.RoomOfferAction.CANCEL_RENT);
+                sendAction(ProtectionRoomManager.RoomOfferAction.CANCEL_RENT, 0.0D);
                 return true;
             }
             return super.mouseClicked(mouseX, mouseY, button);
         }
 
         if (mode == PacketHandler.S2C_OpenRoomOffer.MODE_MANAGE_BOUGHT) {
-            if (buyPrice >= 0.0D && buyButton(x, y).contains(mouseX, mouseY)) {
-                sendAction(ProtectionRoomManager.RoomOfferAction.LIST_SELL);
+            if (listSaleButton(x, y).contains(mouseX, mouseY)) {
+                double price = parsePrice(salePriceBox);
+                if (price >= 0.0D) {
+                    sendAction(ProtectionRoomManager.RoomOfferAction.LIST_SELL, price);
+                }
                 return true;
             }
-            if (rentPrice >= 0.0D && rentButton(x, y).contains(mouseX, mouseY)) {
-                sendAction(ProtectionRoomManager.RoomOfferAction.LIST_RENT);
+            if (listRentButton(x, y).contains(mouseX, mouseY)) {
+                double price = parsePrice(rentPriceBox);
+                if (price >= 0.0D) {
+                    sendAction(ProtectionRoomManager.RoomOfferAction.LIST_RENT, price);
+                }
                 return true;
             }
             return super.mouseClicked(mouseX, mouseY, button);
         }
 
         if (canBuy && buyButton(x, y).contains(mouseX, mouseY)) {
-            sendAction(ProtectionRoomManager.RoomOfferAction.BUY);
+            sendAction(ProtectionRoomManager.RoomOfferAction.BUY, 0.0D);
             return true;
         }
 
         if (canRent && rentButton(x, y).contains(mouseX, mouseY)) {
-            sendAction(ProtectionRoomManager.RoomOfferAction.RENT);
+            sendAction(ProtectionRoomManager.RoomOfferAction.RENT, 0.0D);
             return true;
         }
 
         return super.mouseClicked(mouseX, mouseY, button);
     }
 
-    private void sendAction(ProtectionRoomManager.RoomOfferAction action) {
-        PacketHandler.INSTANCE.sendToServer(new PacketHandler.C2S_RoomOfferChoice(roomId, action));
+    private void sendAction(ProtectionRoomManager.RoomOfferAction action, double requestedPrice) {
+        PacketHandler.INSTANCE.sendToServer(new PacketHandler.C2S_RoomOfferChoice(roomId, action, requestedPrice));
         closeWithClick();
     }
 
@@ -148,6 +185,18 @@ public class RoomOfferScreen extends Screen {
         return new Rect(x + 148, y + 82, 86, 25);
     }
 
+    private Rect listSaleButton(int x, int y) {
+        return new Rect(x + 154, y + 89, 82, 22);
+    }
+
+    private Rect listRentButton(int x, int y) {
+        return new Rect(x + 154, y + 127, 82, 22);
+    }
+
+    private int screenHeight() {
+        return mode == PacketHandler.S2C_OpenRoomOffer.MODE_MANAGE_BOUGHT ? 178 : 150;
+    }
+
     private void closeWithClick() {
         Minecraft.getInstance().getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.UI_BUTTON_CLICK, 1.0F));
         onClose();
@@ -155,6 +204,26 @@ public class RoomOfferScreen extends Screen {
 
     private String formatPrice(double price) {
         return price < 0.0D ? "Unavailable" : EvoCurrencyFormatter.formatWithCurrency(price);
+    }
+
+    private String initialPrice(double price) {
+        if (!Double.isFinite(price) || price < 0.0D) return "";
+        if (price == Math.rint(price)) return Long.toString((long) price);
+        return Double.toString(price);
+    }
+
+    private boolean isPriceText(String value) {
+        return value.matches("\\d{0,12}(\\.\\d{0,2})?");
+    }
+
+    private double parsePrice(EditBox box) {
+        if (box == null || box.getValue().isBlank()) return -1.0D;
+        try {
+            double value = Double.parseDouble(box.getValue());
+            return Double.isFinite(value) && value >= 0.0D ? value : -1.0D;
+        } catch (NumberFormatException ignored) {
+            return -1.0D;
+        }
     }
 
     private void panel(GuiGraphics graphics, int x, int y, int w, int h, String label) {
