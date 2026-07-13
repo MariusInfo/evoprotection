@@ -55,6 +55,8 @@ public class TrustScreen extends Screen {
 
     private void sortClaims() {
         this.myClaimIds.sort(Comparator.comparing(this::getDisplayName).thenComparing(id -> id));
+        Set<String> seenDisplayNames = new HashSet<>();
+        this.myClaimIds.removeIf(id -> !seenDisplayNames.add(getDisplayName(id)));
         if (currentClaimIndex >= myClaimIds.size()) {
             currentClaimIndex = Math.max(0, myClaimIds.size() - 1);
         }

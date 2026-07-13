@@ -17,18 +17,57 @@ import org.evocraft.evoprotection.manager.ClaimManager;
 import org.evocraft.evoprotection.manager.LanguageManager;
 import org.evocraft.evoprotection.manager.ProtectionRoomManager;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.GZIPOutputStream;
 
 public class PacketHandler {
-    private static final String PROTOCOL_VERSION = "1";
+    private static final String PROTOCOL_VERSION = "2";
+    private static final int MAX_CLAIM_ID_LENGTH = 512;
+    private static final int MAX_CLAIM_NAME_LENGTH = 64;
+    private static final int MAX_FLAG_NAME_LENGTH = 32;
+    private static final int MAX_PLAYER_NAME_LENGTH = 32;
+    private static final int MAX_UUID_LENGTH = 36;
+    private static final int MAX_ROLE_LENGTH = 16;
+    private static final long MIN_C2S_INTERVAL_NANOS = 50_000_000L;
+    private static final ConcurrentHashMap<UUID, Long> LAST_C2S_NANOS = new ConcurrentHashMap<>();
     public static final SimpleChannel INSTANCE = NetworkRegistry.newSimpleChannel(
             new ResourceLocation(EvoProtection.MODID, "main"),
-            () -> PROTOCOL_VERSION, s -> true, s -> true
+            () -> PROTOCOL_VERSION, PROTOCOL_VERSION::equals, PROTOCOL_VERSION::equals
     );
 
     private static int packetId = 0;
     private static int nextId() { return packetId++; }
+
+    private static boolean handleC2S(Supplier<NetworkEvent.Context> supplier, Consumer<ServerPlayer> action) {
+        NetworkEvent.Context context = supplier.get();
+        ServerPlayer player = context.getSender();
+        if (player != null && allowC2S(player)) {
+            context.enqueueWork(() -> action.accept(player));
+        }
+        context.setPacketHandled(true);
+        return true;
+    }
+
+    private static boolean allowC2S(ServerPlayer player) {
+        long now = System.nanoTime();
+        boolean[] allowed = {false};
+        LAST_C2S_NANOS.compute(player.getUUID(), (playerId, previous) -> {
+            if (previous == null || now - previous >= MIN_C2S_INTERVAL_NANOS) {
+                allowed[0] = true;
+                return now;
+            }
+            return previous;
+        });
+        return allowed[0];
+    }
 
     public static void register() {
         INSTANCE.registerMessage(nextId(), S2C_SyncClaimData.class, S2C_SyncClaimData::toBytes, S2C_SyncClaimData::new, S2C_SyncClaimData::handle);
@@ -71,6 +110,11 @@ public class PacketHandler {
 
                 INSTANCE.send(PacketDistributor.PLAYER.with(() -> player), new S2C_SyncLanguage(lang));
             }
+        }
+
+        @net.minecraftforge.eventbus.api.SubscribeEvent
+        public static void onPlayerLogout(net.minecraftforge.event.entity.player.PlayerEvent.PlayerLoggedOutEvent event) {
+            LAST_C2S_NANOS.remove(event.getEntity().getUUID());
         }
     }
 
@@ -240,21 +284,18 @@ public class PacketHandler {
         }
 
         public boolean handle(Supplier<NetworkEvent.Context> ctx) {
-            ctx.get().enqueueWork(() -> {
-                ServerPlayer player = ctx.get().getSender();
-                if (player != null) {
+            return handleC2S(ctx, player -> {
+                if (action != null) {
                     ProtectionRoomManager.get().handleRoomOfferAction(player, roomId, action, requestedPrice);
                 }
             });
-            ctx.get().setPacketHandled(true);
-            return true;
         }
 
         private ProtectionRoomManager.RoomOfferAction readAction(String value) {
             try {
                 return ProtectionRoomManager.RoomOfferAction.valueOf(value);
             } catch (Exception ignored) {
-                return ProtectionRoomManager.RoomOfferAction.BUY;
+                return null;
             }
         }
     }
@@ -308,23 +349,72 @@ public class PacketHandler {
     }
 
     public static class S2C_SyncClaimData {
+        private static final int MAX_COMPRESSED_BYTES = 1024 * 1024;
+        private static final int MAX_JSON_BYTES = 4 * 1024 * 1024;
+
         public final String json;
         public final boolean isAdminMap;
+        private final byte[] compressedJson;
+
         public S2C_SyncClaimData(String json, boolean isAdminMap) {
-            this.json = json;
+            this.json = json == null ? "" : json;
             this.isAdminMap = isAdminMap;
+            this.compressedJson = compress(this.json);
         }
+
         public S2C_SyncClaimData(FriendlyByteBuf buf) {
-            this.json = buf.readUtf(262144);
+            this.compressedJson = buf.readByteArray(MAX_COMPRESSED_BYTES);
+            this.json = decompress(compressedJson);
             this.isAdminMap = buf.readBoolean();
         }
+
         public void toBytes(FriendlyByteBuf buf) {
-            buf.writeUtf(json, 262144);
+            buf.writeByteArray(compressedJson);
             buf.writeBoolean(isAdminMap);
         }
+
         public void handle(Supplier<NetworkEvent.Context> ctx) {
             ctx.get().enqueueWork(() -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> ClientPacketHandler.handleSyncClaimData(json, isAdminMap)));
             ctx.get().setPacketHandled(true);
+        }
+
+        private static byte[] compress(String json) {
+            byte[] raw = json.getBytes(StandardCharsets.UTF_8);
+            if (raw.length > MAX_JSON_BYTES) {
+                throw new IllegalArgumentException("Claim sync JSON exceeds the safe limit of " + MAX_JSON_BYTES + " bytes.");
+            }
+
+            try (ByteArrayOutputStream output = new ByteArrayOutputStream();
+                 GZIPOutputStream gzip = new GZIPOutputStream(output)) {
+                gzip.write(raw);
+                gzip.finish();
+                byte[] compressed = output.toByteArray();
+                if (compressed.length > MAX_COMPRESSED_BYTES) {
+                    throw new IllegalArgumentException("Compressed claim sync exceeds the safe limit of " + MAX_COMPRESSED_BYTES + " bytes.");
+                }
+                return compressed;
+            } catch (IOException e) {
+                throw new IllegalStateException("Failed to compress claim sync data.", e);
+            }
+        }
+
+        private static String decompress(byte[] compressed) {
+            try (GZIPInputStream gzip = new GZIPInputStream(new ByteArrayInputStream(compressed));
+                 ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+                byte[] buffer = new byte[8192];
+                int total = 0;
+                int read;
+                while ((read = gzip.read(buffer)) != -1) {
+                    total += read;
+                    if (total > MAX_JSON_BYTES) {
+                        throw new IllegalArgumentException("Decompressed claim sync exceeds the safe limit of " + MAX_JSON_BYTES + " bytes.");
+                    }
+                    output.write(buffer, 0, read);
+                }
+                return output.toString(StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                throw new IllegalArgumentException("Failed to decompress claim sync data.", e);
+            }
         }
     }
 
@@ -333,14 +423,7 @@ public class PacketHandler {
         public C2S_BuyClaimSlot(FriendlyByteBuf buf) {}
         public void toBytes(FriendlyByteBuf buf) {}
         public boolean handle(Supplier<NetworkEvent.Context> supplier) {
-            supplier.get().enqueueWork(() -> {
-                ServerPlayer player = supplier.get().getSender();
-                if (player != null) {
-                    ClaimManager.get().buySlot(player);
-                }
-            });
-            supplier.get().setPacketHandled(true);
-            return true;
+            return handleC2S(supplier, player -> ClaimManager.get().buySlot(player));
         }
     }
 
@@ -350,22 +433,17 @@ public class PacketHandler {
             this.claimName = claimName;
         }
         public C2S_DeleteClaimByName(FriendlyByteBuf buf) {
-            this.claimName = buf.readUtf();
+            this.claimName = buf.readUtf(MAX_CLAIM_ID_LENGTH);
         }
         public void toBytes(FriendlyByteBuf buf) {
-            buf.writeUtf(claimName);
+            buf.writeUtf(claimName, MAX_CLAIM_ID_LENGTH);
         }
         public boolean handle(Supplier<NetworkEvent.Context> supplier) {
-            supplier.get().enqueueWork(() -> {
-                ServerPlayer player = supplier.get().getSender();
-                if (player != null) {
-                    if (ClaimManager.get().unclaimById(player, claimName)) {
-                        ClaimEnvironmentManager.get().refreshAllPlayers(player.getServer());
-                    }
+            return handleC2S(supplier, player -> {
+                if (ClaimManager.get().unclaimGroupById(player, claimName)) {
+                    ClaimEnvironmentManager.get().refreshAllPlayers(player.getServer());
                 }
             });
-            supplier.get().setPacketHandled(true);
-            return true;
         }
     }
 
@@ -382,21 +460,20 @@ public class PacketHandler {
             this.isAdmin = isAdmin;
         }
         public C2S_UpdateFlag(FriendlyByteBuf buf) {
-            this.claimName = buf.readUtf();
-            this.flagName = buf.readUtf();
+            this.claimName = buf.readUtf(MAX_CLAIM_ID_LENGTH);
+            this.flagName = buf.readUtf(MAX_FLAG_NAME_LENGTH);
             this.state = buf.readBoolean();
             this.isAdmin = buf.readBoolean();
         }
         public void toBytes(FriendlyByteBuf buf) {
-            buf.writeUtf(claimName);
-            buf.writeUtf(flagName);
+            buf.writeUtf(claimName, MAX_CLAIM_ID_LENGTH);
+            buf.writeUtf(flagName, MAX_FLAG_NAME_LENGTH);
             buf.writeBoolean(state);
             buf.writeBoolean(isAdmin);
         }
         public boolean handle(Supplier<NetworkEvent.Context> supplier) {
-            supplier.get().enqueueWork(() -> {
-                ServerPlayer player = supplier.get().getSender();
-                if (player != null) {
+            return handleC2S(supplier, player -> {
+                    if (!ClaimManager.isSupportedFlagName(flagName)) return;
                     String lang = ClaimManager.get().getPlayerLanguage(player.getUUID());
                     boolean adminAction = isAdmin && player.hasPermissions(2);
                     if (isAdmin && !adminAction) return;
@@ -421,10 +498,7 @@ public class PacketHandler {
                     String statusStr = state ? LanguageManager.get(lang, "gui.status.on") : LanguageManager.get(lang, "gui.status.off");
                     String displayName = ClaimManager.get().getClaimDisplayName(claimName);
                     player.sendSystemMessage(Component.literal(LanguageManager.get(lang, "msg.flag.updated", flagName, displayName, statusStr)));
-                }
             });
-            supplier.get().setPacketHandled(true);
-            return true;
         }
     }
 
@@ -443,18 +517,16 @@ public class PacketHandler {
             this.chunkX = buf.readInt();
             this.chunkZ = buf.readInt();
             this.isClaiming = buf.readBoolean();
-            this.customName = buf.readUtf();
+            this.customName = buf.readUtf(MAX_CLAIM_NAME_LENGTH);
         }
         public void toBytes(FriendlyByteBuf buf) {
             buf.writeInt(chunkX);
             buf.writeInt(chunkZ);
             buf.writeBoolean(isClaiming);
-            buf.writeUtf(customName);
+            buf.writeUtf(customName, MAX_CLAIM_NAME_LENGTH);
         }
         public boolean handle(Supplier<NetworkEvent.Context> supplier) {
-            supplier.get().enqueueWork(() -> {
-                ServerPlayer player = supplier.get().getSender();
-                if (player != null) {
+            return handleC2S(supplier, player -> {
                     ChunkPos target = new ChunkPos(chunkX, chunkZ);
                     if (!ClaimManager.get().isChunkInsideClientMap(player, target)) return;
                     boolean changed;
@@ -466,10 +538,7 @@ public class PacketHandler {
                     if (changed) {
                         ClaimEnvironmentManager.get().refreshAllPlayers(player.getServer());
                     }
-                }
             });
-            supplier.get().setPacketHandled(true);
-            return true;
         }
     }
 
@@ -488,18 +557,17 @@ public class PacketHandler {
             this.chunkX = buf.readInt();
             this.chunkZ = buf.readInt();
             this.isClaiming = buf.readBoolean();
-            this.customName = buf.readUtf();
+            this.customName = buf.readUtf(MAX_CLAIM_NAME_LENGTH);
         }
         public void toBytes(FriendlyByteBuf buf) {
             buf.writeInt(chunkX);
             buf.writeInt(chunkZ);
             buf.writeBoolean(isClaiming);
-            buf.writeUtf(customName);
+            buf.writeUtf(customName, MAX_CLAIM_NAME_LENGTH);
         }
         public boolean handle(Supplier<NetworkEvent.Context> supplier) {
-            supplier.get().enqueueWork(() -> {
-                ServerPlayer player = supplier.get().getSender();
-                if (player != null && player.hasPermissions(2)) {
+            return handleC2S(supplier, player -> {
+                if (player.hasPermissions(2)) {
                     ChunkPos target = new ChunkPos(chunkX, chunkZ);
                     if (!ClaimManager.get().isChunkInsideClientMap(player, target)) return;
                     String dim = player.level().dimension().location().toString();
@@ -514,8 +582,6 @@ public class PacketHandler {
                     ClaimManager.get().syncToAdminClient(player);
                 }
             });
-            supplier.get().setPacketHandled(true);
-            return true;
         }
     }
 
@@ -534,23 +600,21 @@ public class PacketHandler {
             this.role = ClaimManager.normalizeTrustRole(role);
         }
         public C2S_ManageTrust(FriendlyByteBuf buf) {
-            this.targetName = buf.readUtf();
-            this.targetUuidStr = buf.readUtf();
+            this.targetName = buf.readUtf(MAX_PLAYER_NAME_LENGTH);
+            this.targetUuidStr = buf.readUtf(MAX_UUID_LENGTH);
             this.isAdding = buf.readBoolean();
-            this.claimName = buf.readUtf();
-            this.role = ClaimManager.normalizeTrustRole(buf.readUtf());
+            this.claimName = buf.readUtf(MAX_CLAIM_ID_LENGTH);
+            this.role = ClaimManager.normalizeTrustRole(buf.readUtf(MAX_ROLE_LENGTH));
         }
         public void toBytes(FriendlyByteBuf buf) {
-            buf.writeUtf(targetName);
-            buf.writeUtf(targetUuidStr);
+            buf.writeUtf(targetName, MAX_PLAYER_NAME_LENGTH);
+            buf.writeUtf(targetUuidStr, MAX_UUID_LENGTH);
             buf.writeBoolean(isAdding);
-            buf.writeUtf(claimName);
-            buf.writeUtf(role);
+            buf.writeUtf(claimName, MAX_CLAIM_ID_LENGTH);
+            buf.writeUtf(role, MAX_ROLE_LENGTH);
         }
         public boolean handle(Supplier<NetworkEvent.Context> supplier) {
-            supplier.get().enqueueWork(() -> {
-                ServerPlayer player = supplier.get().getSender();
-                if (player != null) {
+            return handleC2S(supplier, player -> {
                     String lang = ClaimManager.get().getPlayerLanguage(player.getUUID());
                     if (isAdding) {
                         UUID targetUuid = null;
@@ -586,10 +650,7 @@ public class PacketHandler {
                             }
                         } catch (Exception ignored) {}
                     }
-                }
             });
-            supplier.get().setPacketHandled(true);
-            return true;
         }
     }
 }

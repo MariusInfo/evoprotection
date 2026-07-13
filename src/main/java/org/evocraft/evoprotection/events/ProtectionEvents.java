@@ -3,6 +3,8 @@ package org.evocraft.evoprotection.events;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.MobCategory;
+import net.minecraft.world.entity.MobSpawnType;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -36,6 +38,7 @@ import org.evocraft.evoprotection.manager.ClaimManager;
 import org.evocraft.evoprotection.manager.ProtectionRoomManager;
 import org.evocraft.evoprotection.network.PacketHandler;
 import org.evocraft.evoprotection.manager.ProtectionConfig;
+import org.evocraft.evoprotection.manager.ProtectionPermissions;
 import org.evocraft.evocore.data.EconomyManager;
 import org.evocraft.evocore.util.EvoCurrencyFormatter;
 
@@ -49,6 +52,7 @@ import java.util.UUID;
 public class ProtectionEvents {
 
     private static final Map<UUID, String> lastChunkOwnerMap = new HashMap<>();
+    private static final String SPAWN_RULE_CHECKED_TAG = "EvoProtectionSpawnRuleChecked";
 
     // ==========================================
     // ⏳ PAYDAY & ANTI-AFK SYSTEM (PLOT/CREATIVE ONLY)
@@ -82,6 +86,7 @@ public class ProtectionEvents {
         UUID owner = ClaimManager.get().getChunkOwner(targetChunk, dim);
 
         if (owner == null) return true; // Can use in wilderness
+        if (ProtectionPermissions.canBypassClaim(player, owner)) return true;
         if (owner.equals(player.getUUID())) return true; // Can use in own claim
 
         String claimId = ClaimManager.get().getClaimId(targetChunk, dim);
@@ -98,6 +103,47 @@ public class ProtectionEvents {
 
     private static void sendMsg(ServerPlayer player, String message) {
         player.displayClientMessage(Component.literal(message), true);
+    }
+
+    private static boolean isAnimalMob(net.minecraft.world.entity.Mob entity) {
+        MobCategory category = entity.getType().getCategory();
+        return entity instanceof net.minecraft.world.entity.animal.Animal
+                || entity instanceof net.minecraft.world.entity.animal.WaterAnimal
+                || category == MobCategory.CREATURE
+                || category == MobCategory.AMBIENT
+                || category == MobCategory.WATER_CREATURE
+                || category == MobCategory.WATER_AMBIENT
+                || category == MobCategory.AXOLOTLS;
+    }
+
+    private static boolean isManualSpawn(MobSpawnType spawnType) {
+        return spawnType == MobSpawnType.BREEDING
+                || spawnType == MobSpawnType.SPAWN_EGG
+                || spawnType == MobSpawnType.BUCKET
+                || spawnType == MobSpawnType.COMMAND;
+    }
+
+    private static boolean isMobSpawnAllowed(net.minecraft.world.entity.Mob entity,
+                                             MobSpawnType spawnType,
+                                             boolean hasSpawner) {
+        ChunkPos chunkPos = new ChunkPos(entity.blockPosition());
+        String dimension = entity.level().dimension().location().toString();
+        UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dimension);
+        if (owner == null || isManualSpawn(spawnType)) return true;
+
+        String claimId = ClaimManager.get().getClaimId(chunkPos, dimension);
+        boolean fromSpawner = hasSpawner || spawnType == MobSpawnType.SPAWNER;
+        boolean isMonster = entity instanceof Monster || entity.getType().getCategory() == MobCategory.MONSTER;
+
+        if (isMonster) {
+            return ClaimManager.get().getFlag(owner, claimId,
+                    fromSpawner ? "spawner_monsters" : "natural_monsters");
+        }
+        if (isAnimalMob(entity)) {
+            return ClaimManager.get().getFlag(owner, claimId,
+                    fromSpawner ? "spawner_animals" : "natural_animals");
+        }
+        return true;
     }
 
     // ==========================================
@@ -256,10 +302,7 @@ public class ProtectionEvents {
                 UUID attackerZoneOwner = ClaimManager.get().getChunkOwner(attackerChunk, dim);
                 UUID targetZoneOwner = ClaimManager.get().getChunkOwner(targetChunk, dim);
 
-                if (attackerZoneOwner != null && !attacker.hasPermissions(2)) {
-                    if (attackerZoneOwner.getMostSignificantBits() == 0 && attackerZoneOwner.getLeastSignificantBits() == 0) {
-                        event.setCanceled(true); sendMsg(attacker); return;
-                    }
+                if (attackerZoneOwner != null && !ProtectionPermissions.canBypassClaim(attacker, attackerZoneOwner)) {
                     String claimId = ClaimManager.get().getClaimId(attackerChunk, dim);
                     if (!ClaimManager.get().getFlag(attackerZoneOwner, claimId, "pvp")) {
                         event.setCanceled(true);
@@ -268,10 +311,7 @@ public class ProtectionEvents {
                     }
                 }
 
-                if (targetZoneOwner != null && !attacker.hasPermissions(2)) {
-                    if (targetZoneOwner.getMostSignificantBits() == 0 && targetZoneOwner.getLeastSignificantBits() == 0) {
-                        event.setCanceled(true); sendMsg(attacker); return;
-                    }
+                if (targetZoneOwner != null && !ProtectionPermissions.canBypassClaim(attacker, targetZoneOwner)) {
                     String claimId = ClaimManager.get().getClaimId(targetChunk, dim);
                     if (!ClaimManager.get().getFlag(targetZoneOwner, claimId, "pvp")) {
                         event.setCanceled(true);
@@ -285,11 +325,12 @@ public class ProtectionEvents {
             ChunkPos chunkPos = new ChunkPos(target.blockPosition());
             UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dim);
 
-            if (owner != null && !owner.equals(attacker.getUUID()) && !attacker.hasPermissions(2)) {
+            if (owner != null && !owner.equals(attacker.getUUID())
+                    && !ProtectionPermissions.canBypassClaim(attacker, owner)) {
                 String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
                 if (!ClaimManager.get().isTrusted(owner, attacker.getUUID(), claimId)) {
 
-                    if (target instanceof net.minecraft.world.entity.animal.Animal) {
+                    if (target instanceof net.minecraft.world.entity.Mob mob && isAnimalMob(mob)) {
                         if (!ClaimManager.get().getFlag(owner, claimId, "hurt_animals")) {
                             event.setCanceled(true);
                             sendMsg(attacker);
@@ -318,10 +359,8 @@ public class ProtectionEvents {
                 UUID attackerZoneOwner = ClaimManager.get().getChunkOwner(attackerChunk, dim);
                 UUID targetZoneOwner = ClaimManager.get().getChunkOwner(targetChunk, dim);
 
-                if (attackerZoneOwner != null) {
-                    if (attackerZoneOwner.getMostSignificantBits() == 0 && attackerZoneOwner.getLeastSignificantBits() == 0) {
-                        event.setCanceled(true); return;
-                    }
+                if (attackerZoneOwner != null
+                        && !ProtectionPermissions.canBypassClaim(attackerPlayer, attackerZoneOwner)) {
                     String claimId = ClaimManager.get().getClaimId(attackerChunk, dim);
                     if (!ClaimManager.get().getFlag(attackerZoneOwner, claimId, "pvp")) {
                         event.setCanceled(true);
@@ -329,10 +368,8 @@ public class ProtectionEvents {
                     }
                 }
 
-                if (targetZoneOwner != null) {
-                    if (targetZoneOwner.getMostSignificantBits() == 0 && targetZoneOwner.getLeastSignificantBits() == 0) {
-                        event.setCanceled(true); return;
-                    }
+                if (targetZoneOwner != null
+                        && !ProtectionPermissions.canBypassClaim(attackerPlayer, targetZoneOwner)) {
                     String claimId = ClaimManager.get().getClaimId(targetChunk, dim);
                     if (!ClaimManager.get().getFlag(targetZoneOwner, claimId, "pvp")) {
                         event.setCanceled(true);
@@ -457,15 +494,35 @@ public class ProtectionEvents {
 
     @SubscribeEvent(priority = EventPriority.HIGHEST)
     public static void onEntityJoin(EntityJoinLevelEvent event) {
+        if (event.getLevel().isClientSide()) return;
+
         if (event.getEntity() instanceof net.minecraft.world.entity.LightningBolt ||
                 event.getEntity() instanceof net.minecraft.world.entity.item.PrimedTnt) {
             ChunkPos pos = new ChunkPos(event.getEntity().blockPosition());
             String dim = event.getLevel().dimension().location().toString();
             UUID owner = ClaimManager.get().getChunkOwner(pos, dim);
 
-            if (owner != null && owner.getMostSignificantBits() == 0 && owner.getLeastSignificantBits() == 0) {
-                event.setCanceled(true);
+            if (owner != null) {
+                String claimId = ClaimManager.get().getClaimId(pos, dim);
+                if (!ClaimManager.get().getFlag(owner, claimId, "explosions")) {
+                    event.setCanceled(true);
+                }
             }
+            return;
+        }
+
+        if (event.loadedFromDisk() || !(event.getEntity() instanceof net.minecraft.world.entity.Mob mob)) {
+            return;
+        }
+
+        if (mob.getPersistentData().getBoolean(SPAWN_RULE_CHECKED_TAG)) {
+            mob.getPersistentData().remove(SPAWN_RULE_CHECKED_TAG);
+            return;
+        }
+
+        // Some mods insert entities directly and never fire Forge's normal spawn flow.
+        if (!isMobSpawnAllowed(mob, MobSpawnType.NATURAL, false)) {
+            event.setCanceled(true);
         }
     }
 
@@ -473,60 +530,21 @@ public class ProtectionEvents {
     // 🧬 SPAWN CONTROL (ANIMALS & MONSTERS)
     // ==========================================
     @SubscribeEvent(priority = EventPriority.HIGHEST)
+    public static void onMobPositionCheck(net.minecraftforge.event.entity.living.MobSpawnEvent.PositionCheck event) {
+        if (!isMobSpawnAllowed(event.getEntity(), event.getSpawnType(), event.getSpawner() != null)) {
+            event.setResult(Event.Result.DENY);
+        }
+    }
+
+    @SubscribeEvent(priority = EventPriority.HIGHEST)
     public static void onMobSpawn(net.minecraftforge.event.entity.living.MobSpawnEvent.FinalizeSpawn event) {
         net.minecraft.world.entity.Mob entity = event.getEntity();
-        ChunkPos pos = new ChunkPos(entity.blockPosition());
-        String dim = entity.level().dimension().location().toString();
-        UUID owner = ClaimManager.get().getChunkOwner(pos, dim);
-
-        if (owner != null) {
-            if (owner.getMostSignificantBits() == 0 && owner.getLeastSignificantBits() == 0) {
-                event.setResult(Event.Result.DENY);
-                event.setCanceled(true);
-                return;
-            }
-
-            String claimId = ClaimManager.get().getClaimId(pos, dim);
-            net.minecraft.world.entity.MobSpawnType spawnType = event.getSpawnType();
-
-            // Always allow Breeding, Spawn Eggs, Buckets, and Commands to not block manual interaction
-            if (spawnType == net.minecraft.world.entity.MobSpawnType.BREEDING ||
-                    spawnType == net.minecraft.world.entity.MobSpawnType.SPAWN_EGG ||
-                    spawnType == net.minecraft.world.entity.MobSpawnType.BUCKET ||
-                    spawnType == net.minecraft.world.entity.MobSpawnType.COMMAND) {
-                return;
-            }
-
-            boolean isMonster = entity instanceof net.minecraft.world.entity.monster.Monster;
-            boolean isAnimal = entity instanceof net.minecraft.world.entity.animal.Animal || entity instanceof net.minecraft.world.entity.animal.WaterAnimal;
-            boolean isSpawner = (spawnType == net.minecraft.world.entity.MobSpawnType.SPAWNER);
-
-            if (isMonster) {
-                if (isSpawner) {
-                    if (!ClaimManager.get().getFlag(owner, claimId, "spawner_monsters")) {
-                        event.setResult(Event.Result.DENY);
-                        event.setCanceled(true);
-                    }
-                } else {
-                    if (!ClaimManager.get().getFlag(owner, claimId, "natural_monsters")) {
-                        event.setResult(Event.Result.DENY);
-                        event.setCanceled(true);
-                    }
-                }
-            } else if (isAnimal) {
-                if (isSpawner) {
-                    if (!ClaimManager.get().getFlag(owner, claimId, "spawner_animals")) {
-                        event.setResult(Event.Result.DENY);
-                        event.setCanceled(true);
-                    }
-                } else {
-                    if (!ClaimManager.get().getFlag(owner, claimId, "natural_animals")) {
-                        event.setResult(Event.Result.DENY);
-                        event.setCanceled(true);
-                    }
-                }
-            }
+        if (!isMobSpawnAllowed(entity, event.getSpawnType(), event.getSpawner() != null)) {
+            // Canceling this event only skips initialization; this Forge flag blocks world insertion.
+            event.setSpawnCancelled(true);
+            return;
         }
+        entity.getPersistentData().putBoolean(SPAWN_RULE_CHECKED_TAG, true);
     }
 
 
@@ -545,7 +563,8 @@ public class ProtectionEvents {
                 return;
             }
 
-            if (owner != null && !owner.equals(player.getUUID()) && !player.hasPermissions(2)) {
+            if (owner != null && !owner.equals(player.getUUID())
+                    && !ProtectionPermissions.canBypassClaim(player, owner)) {
                 String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
                 if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) {
                     if (!ClaimManager.get().getFlag(owner, claimId, "item_pickup")) {
@@ -586,7 +605,6 @@ public class ProtectionEvents {
             ChunkPos chunkPos = new ChunkPos(pos);
             UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dim);
             if (owner != null) {
-                if (owner.getMostSignificantBits() == 0 && owner.getLeastSignificantBits() == 0) return true;
                 String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
                 return !ClaimManager.get().getFlag(owner, claimId, "explosions");
             }
@@ -599,7 +617,6 @@ public class ProtectionEvents {
             ChunkPos chunkPos = new ChunkPos(entity.blockPosition());
             UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dim);
             if (owner != null) {
-                if (owner.getMostSignificantBits() == 0 && owner.getLeastSignificantBits() == 0) return true;
                 String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
                 return !ClaimManager.get().getFlag(owner, claimId, "explosions");
             }
@@ -744,7 +761,8 @@ public class ProtectionEvents {
                 }
             }
 
-            if (owner != null && !owner.equals(player.getUUID()) && !player.hasPermissions(2)) {
+            if (owner != null && !owner.equals(player.getUUID())
+                    && !ProtectionPermissions.canBypassClaim(player, owner)) {
                 String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
                 if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) {
 
@@ -757,6 +775,7 @@ public class ProtectionEvents {
                             sendMsg(player, "§c[!] You do not have permission to use Carry On here!");
                             return;
                         }
+                        return;
                     }
                 }
             }
@@ -790,7 +809,7 @@ public class ProtectionEvents {
             }
 
             BlockState state = player.level().getBlockState(event.getPos());
-            if (!canInteract(player, event.getPos(), true, state)) {
+            if (!canInteract(player, event.getPos(), false, state)) {
                 event.setCanceled(true);
             }
         }
@@ -823,11 +842,10 @@ public class ProtectionEvents {
                 }
             }
 
-            if (owner != null && !owner.equals(player.getUUID()) && !player.hasPermissions(2)) {
+            if (owner != null && !owner.equals(player.getUUID())
+                    && !ProtectionPermissions.canBypassClaim(player, owner)) {
                 String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
                 if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) {
-                    if (ClaimManager.get().getFlag(owner, claimId, "public_build")) return;
-
                     boolean isCarryOnAttempt = player.isCrouching() && player.getMainHandItem().isEmpty() && player.getOffhandItem().isEmpty();
                     if (isCarryOnAttempt) {
                         if (!ClaimManager.get().getFlag(owner, claimId, "carry_on")) {
@@ -835,6 +853,7 @@ public class ProtectionEvents {
                             sendMsg(player, "§c[!] You do not have permission to use Carry On here!");
                             return;
                         }
+                        return;
                     }
 
                     if (!ClaimManager.get().getFlag(owner, claimId, "interact_entities")) {
@@ -873,11 +892,10 @@ public class ProtectionEvents {
                 }
             }
 
-            if (owner != null && !owner.equals(player.getUUID()) && !player.hasPermissions(2)) {
+            if (owner != null && !owner.equals(player.getUUID())
+                    && !ProtectionPermissions.canBypassClaim(player, owner)) {
                 String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
                 if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) {
-                    if (ClaimManager.get().getFlag(owner, claimId, "public_build")) return;
-
                     boolean isCarryOnAttempt = player.isCrouching() && player.getMainHandItem().isEmpty() && player.getOffhandItem().isEmpty();
                     if (isCarryOnAttempt) {
                         if (!ClaimManager.get().getFlag(owner, claimId, "carry_on")) {
@@ -885,6 +903,7 @@ public class ProtectionEvents {
                             sendMsg(player, "§c[!] You do not have permission to use Carry On here!");
                             return;
                         }
+                        return;
                     }
 
                     if (!ClaimManager.get().getFlag(owner, claimId, "interact_entities")) {
@@ -948,29 +967,29 @@ public class ProtectionEvents {
             return ProtectionRoomManager.get().canPlayerAccessRoom(player, room);
         }
 
-        if (owner.equals(player.getUUID())) return true;
+        if (ProtectionPermissions.canBypassClaim(player, owner)) return true;
 
-        if (owner.getMostSignificantBits() == 0 && owner.getLeastSignificantBits() == 0) {
-            return isRightClick;
-        }
+        if (owner.equals(player.getUUID())) return true;
 
         String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
         if (ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) return true;
 
-        if (ClaimManager.get().getFlag(owner, claimId, "public_build")) return true;
+        boolean publicBuild = ClaimManager.get().getFlag(owner, claimId, "public_build");
+        if (!isRightClick) return publicBuild;
 
-        if (isRightClick && state != null) {
+        if (state != null) {
             Block block = state.getBlock();
+
+            boolean placingBlock = player.getMainHandItem().getItem() instanceof net.minecraft.world.item.BlockItem
+                    || player.getOffhandItem().getItem() instanceof net.minecraft.world.item.BlockItem;
+            if (publicBuild && placingBlock) return true;
 
             boolean isDoor = block instanceof net.minecraft.world.level.block.DoorBlock ||
                     block instanceof net.minecraft.world.level.block.TrapDoorBlock ||
                     block instanceof net.minecraft.world.level.block.FenceGateBlock ||
                     block instanceof net.minecraft.world.level.block.ButtonBlock ||
                     block instanceof net.minecraft.world.level.block.LeverBlock;
-            if (isDoor && ClaimManager.get().getFlag(owner, claimId, "doors")) return true;
-
-            boolean isContainer = state.hasBlockEntity() || block instanceof net.minecraft.world.level.block.AbstractChestBlock;
-            if (isContainer && ClaimManager.get().getFlag(owner, claimId, "chests")) return true;
+            if (isDoor) return ClaimManager.get().getFlag(owner, claimId, "doors");
 
             boolean isUse = block instanceof net.minecraft.world.level.block.CraftingTableBlock ||
                     block instanceof net.minecraft.world.level.block.AnvilBlock ||
@@ -979,11 +998,17 @@ public class ProtectionEvents {
                     block instanceof net.minecraft.world.level.block.CartographyTableBlock ||
                     block instanceof net.minecraft.world.level.block.SmithingTableBlock ||
                     block instanceof net.minecraft.world.level.block.GrindstoneBlock ||
+                    block instanceof net.minecraft.world.level.block.StonecutterBlock ||
+                    block instanceof net.minecraft.world.level.block.LecternBlock ||
                     block instanceof net.minecraft.world.level.block.BedBlock ||
                     block instanceof net.minecraft.world.level.block.BellBlock;
-            if (isUse && ClaimManager.get().getFlag(owner, claimId, "use")) return true;
+            if (isUse) return ClaimManager.get().getFlag(owner, claimId, "use");
+
+            boolean isContainer = state.getMenuProvider(player.level(), pos) != null
+                    || block instanceof net.minecraft.world.level.block.AbstractChestBlock;
+            if (isContainer) return ClaimManager.get().getFlag(owner, claimId, "chests");
         }
 
-        return false;
+        return publicBuild;
     }
 }

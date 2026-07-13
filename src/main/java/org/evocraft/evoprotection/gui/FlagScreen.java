@@ -15,7 +15,7 @@ public class FlagScreen extends Screen {
     private final Map<String, String> claimDisplayNames;
 
     private int currentClaimIndex = 0;
-    private final int imageWidth = 320;
+    private final int imageWidth = 380;
     private final int imageHeight = 335;
     private final List<CustomButton> buttons = new ArrayList<>();
 
@@ -97,33 +97,33 @@ public class FlagScreen extends Screen {
         buttons.add(new CustomButton("<", x + 20, y + 35, 20, 20, () -> {
             if (currentClaimIndex > 0) { currentClaimIndex--; this.init(); }
         }));
-        buttons.add(new CustomButton(">", x + 280, y + 35, 20, 20, () -> {
+        buttons.add(new CustomButton(">", x + 340, y + 35, 20, 20, () -> {
             if (currentClaimIndex < myClaimIds.size() - 1) { currentClaimIndex++; this.init(); }
         }));
 
         int startY = y + 70;
 
         // Left Column
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.pvp") + getStatus("pvp"), x + 15, startY, 140, 20, () -> toggleFlag("pvp")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.doors") + getStatus("doors"), x + 15, startY + 25, 140, 20, () -> toggleFlag("doors")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.use") + getStatus("use"), x + 15, startY + 50, 140, 20, () -> toggleFlag("use")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.interact") + getStatus("interact_entities"), x + 15, startY + 75, 140, 20, () -> toggleFlag("interact_entities")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.pickup") + getStatus("item_pickup"), x + 15, startY + 100, 140, 20, () -> toggleFlag("item_pickup")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.natural_animals") + getStatus("natural_animals"), x + 15, startY + 125, 140, 20, () -> toggleFlag("natural_animals")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.spawner_animals") + getStatus("spawner_animals"), x + 15, startY + 150, 140, 20, () -> toggleFlag("spawner_animals")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.always_middle_day") + getStatus("always_middle_day"), x + 15, startY + 175, 140, 20, () -> toggleFlag("always_middle_day")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.always_shiny") + getStatus("always_shiny"), x + 15, startY + 200, 140, 20, () -> toggleFlag("always_shiny")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.pvp") + getStatus("pvp"), x + 15, startY, 170, 20, () -> toggleFlag("pvp")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.doors") + getStatus("doors"), x + 15, startY + 25, 170, 20, () -> toggleFlag("doors")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.use") + getStatus("use"), x + 15, startY + 50, 170, 20, () -> toggleFlag("use")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.interact") + getStatus("interact_entities"), x + 15, startY + 75, 170, 20, () -> toggleFlag("interact_entities")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.pickup") + getStatus("item_pickup"), x + 15, startY + 100, 170, 20, () -> toggleFlag("item_pickup")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.natural_animals") + getStatus("natural_animals"), x + 15, startY + 125, 170, 20, () -> toggleFlag("natural_animals")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.spawner_animals") + getStatus("spawner_animals"), x + 15, startY + 150, 170, 20, () -> toggleFlag("spawner_animals")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.always_middle_day") + getStatus("always_middle_day"), x + 15, startY + 175, 170, 20, () -> toggleFlag("always_middle_day")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.always_shiny") + getStatus("always_shiny"), x + 15, startY + 200, 170, 20, () -> toggleFlag("always_shiny")));
 
         // Right Column
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.explosions") + getStatus("explosions"), x + 165, startY, 140, 20, () -> toggleFlag("explosions")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.chests") + getStatus("chests"), x + 165, startY + 25, 140, 20, () -> toggleFlag("chests")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.public_build") + getStatus("public_build"), x + 165, startY + 50, 140, 20, () -> toggleFlag("public_build")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.carry_on") + getStatus("carry_on"), x + 165, startY + 75, 140, 20, () -> toggleFlag("carry_on")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.hurt_animals") + getStatus("hurt_animals"), x + 165, startY + 100, 140, 20, () -> toggleFlag("hurt_animals")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.natural_monsters") + getStatus("natural_monsters"), x + 165, startY + 125, 140, 20, () -> toggleFlag("natural_monsters")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.spawner_monsters") + getStatus("spawner_monsters"), x + 165, startY + 150, 140, 20, () -> toggleFlag("spawner_monsters")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.always_middle_night") + getStatus("always_middle_night"), x + 165, startY + 175, 140, 20, () -> toggleFlag("always_middle_night")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.always_rain") + getStatus("always_rain"), x + 165, startY + 200, 140, 20, () -> toggleFlag("always_rain")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.explosions") + getStatus("explosions"), x + 195, startY, 170, 20, () -> toggleFlag("explosions")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.chests") + getStatus("chests"), x + 195, startY + 25, 170, 20, () -> toggleFlag("chests")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.public_build") + getStatus("public_build"), x + 195, startY + 50, 170, 20, () -> toggleFlag("public_build")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.carry_on") + getStatus("carry_on"), x + 195, startY + 75, 170, 20, () -> toggleFlag("carry_on")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.hurt_animals") + getStatus("hurt_animals"), x + 195, startY + 100, 170, 20, () -> toggleFlag("hurt_animals")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.natural_monsters") + getStatus("natural_monsters"), x + 195, startY + 125, 170, 20, () -> toggleFlag("natural_monsters")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.spawner_monsters") + getStatus("spawner_monsters"), x + 195, startY + 150, 170, 20, () -> toggleFlag("spawner_monsters")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.always_middle_night") + getStatus("always_middle_night"), x + 195, startY + 175, 170, 20, () -> toggleFlag("always_middle_night")));
+        buttons.add(new CustomButton(LanguageManager.get("gui.flags.always_rain") + getStatus("always_rain"), x + 195, startY + 200, 170, 20, () -> toggleFlag("always_rain")));
     }
 
     private String getStatus(String flag) {
@@ -208,9 +208,12 @@ public class FlagScreen extends Screen {
             boolean hover = mx >= x && mx <= x + w && my >= y && my <= y + h;
             fillRounded(g, x, y, w, h, 0xAA141C14);
             outlineRounded(g, x, y, w, h, hover ? 0xFF45996C : 0xFF2D5947);
+            int textWidth = Math.max(1, font.width(text));
+            float textScale = Math.min(1.0f, (w - 8.0f) / textWidth);
             g.pose().pushPose();
-            g.pose().translate(x + w / 2f, y + (h - 8) / 2f, 0);
-            g.drawCenteredString(font, font.plainSubstrByWidth(text, w - 6), 0, 0, hover ? 0xFFFFFF : 0xFFDDDDDD);
+            g.pose().translate(x + w / 2f, y + (h - 8 * textScale) / 2f, 0);
+            g.pose().scale(textScale, textScale, 1.0f);
+            g.drawCenteredString(font, text, 0, 0, hover ? 0xFFFFFF : 0xFFDDDDDD);
             g.pose().popPose();
         }
 

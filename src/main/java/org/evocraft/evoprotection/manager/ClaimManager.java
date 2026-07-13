@@ -5,6 +5,7 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.reflect.TypeToken;
+import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -40,10 +41,29 @@ public class ClaimManager {
     public static final String ROLE_FRIEND = "friend";
     public static final String ROLE_VISITOR = "visitor";
     private static final Set<String> BUILD_ROLES = Set.of(ROLE_COOWNER, ROLE_ADMIN, ROLE_FRIEND);
+    private static final int MAX_CLAIM_NAME_LENGTH = 64;
+    private static final Set<String> SUPPORTED_FLAGS = Set.of(
+            "pvp", "doors", "use", "interact_entities", "item_pickup",
+            "natural_animals", "spawner_animals", "explosions", "chests",
+            "public_build", "carry_on", "hurt_animals", "natural_monsters",
+            "spawner_monsters", ClaimEnvironmentManager.FLAG_ALWAYS_MIDDLE_DAY,
+            ClaimEnvironmentManager.FLAG_ALWAYS_MIDDLE_NIGHT,
+            ClaimEnvironmentManager.FLAG_ALWAYS_SHINY,
+            ClaimEnvironmentManager.FLAG_ALWAYS_RAIN
+    );
     private final Gson GSON = new GsonBuilder().create();
+
+    public static boolean isAdminClaimOwner(UUID owner) {
+        return ADMIN_UUID.equals(owner);
+    }
 
     private final Map<String, UUID> chunkOwners = new ConcurrentHashMap<>();
     private final Map<String, String> chunkCustomNames = new ConcurrentHashMap<>();
+    private final Map<String, String> chunkClaimIds = new ConcurrentHashMap<>();
+    private final Map<String, Set<String>> claimChunkKeys = new ConcurrentHashMap<>();
+    private final Map<String, UUID> claimOwners = new ConcurrentHashMap<>();
+    private final Map<UUID, Set<String>> ownerClaimIds = new ConcurrentHashMap<>();
+    private final Map<UUID, Set<String>> ownerChunkKeys = new ConcurrentHashMap<>();
     private final Map<UUID, String> playerNames = new ConcurrentHashMap<>();
     private final Map<UUID, Integer> boughtSlots = new ConcurrentHashMap<>();
     private final Map<UUID, Map<String, Map<UUID, String>>> trustedPlayers = new ConcurrentHashMap<>();
@@ -98,27 +118,112 @@ public class ClaimManager {
         return makeChunkClaimId(pos, dim);
     }
 
-    private String getClaimIdFromChunkKey(String chunkKey) {
+    private String computeClaimIdFromChunkKey(String chunkKey, UUID owner) {
         String[] parts = chunkKey.split(";", 3);
         if (parts.length < 3) return "chunk;" + chunkKey;
-        return getClaimId(new ChunkPos(Integer.parseInt(parts[0]), Integer.parseInt(parts[1])), parts[2]);
+
+        try {
+            if (ProtectionConfig.get().isPlotMode && owner != null && !ADMIN_UUID.equals(owner)) {
+                int[] plotCoords = getPlotCoordsFromChunk(new ChunkPos(
+                        Integer.parseInt(parts[0]),
+                        Integer.parseInt(parts[1])
+                ));
+                return makePlotClaimId(plotCoords[0], plotCoords[1], parts[2]);
+            }
+        } catch (NumberFormatException ignored) {
+            return "chunk;" + chunkKey;
+        }
+
+        return "chunk;" + chunkKey;
+    }
+
+    private String getClaimIdFromChunkKey(String chunkKey) {
+        String cachedClaimId = chunkClaimIds.get(chunkKey);
+        if (cachedClaimId != null) return cachedClaimId;
+
+        UUID owner = chunkOwners.get(chunkKey);
+        String claimId = computeClaimIdFromChunkKey(chunkKey, owner);
+        if (owner != null) indexClaimChunk(chunkKey, owner, claimId);
+        return claimId;
     }
 
     private boolean claimIdMatchesChunkKey(String claimId, String chunkKey) {
         return claimId != null && claimId.equals(getClaimIdFromChunkKey(chunkKey));
     }
 
-    private List<String> getChunkKeysForClaimId(String claimId, UUID expectedOwner) {
-        List<String> keys = new ArrayList<>();
-        if (claimId == null || claimId.isEmpty()) return keys;
+    private void clearClaimIndexes() {
+        chunkClaimIds.clear();
+        claimChunkKeys.clear();
+        claimOwners.clear();
+        ownerClaimIds.clear();
+        ownerChunkKeys.clear();
+    }
 
+    private void rebuildClaimIndexes() {
+        clearClaimIndexes();
         for (Map.Entry<String, UUID> entry : chunkOwners.entrySet()) {
-            if (expectedOwner != null && !expectedOwner.equals(entry.getValue())) continue;
-            if (claimIdMatchesChunkKey(claimId, entry.getKey())) {
-                keys.add(entry.getKey());
+            indexClaimChunk(entry.getKey(), entry.getValue(), computeClaimIdFromChunkKey(entry.getKey(), entry.getValue()));
+        }
+    }
+
+    private void indexClaimChunk(String chunkKey, UUID owner, String claimId) {
+        if (chunkKey == null || owner == null || claimId == null || claimId.isEmpty()) return;
+
+        chunkClaimIds.put(chunkKey, claimId);
+        claimChunkKeys.computeIfAbsent(claimId, ignored -> ConcurrentHashMap.newKeySet()).add(chunkKey);
+        claimOwners.put(claimId, owner);
+        ownerClaimIds.computeIfAbsent(owner, ignored -> ConcurrentHashMap.newKeySet()).add(claimId);
+        ownerChunkKeys.computeIfAbsent(owner, ignored -> ConcurrentHashMap.newKeySet()).add(chunkKey);
+    }
+
+    private void removeClaimChunkFromIndexes(String chunkKey) {
+        UUID owner = chunkOwners.get(chunkKey);
+        String claimId = chunkClaimIds.remove(chunkKey);
+
+        if (owner != null) {
+            Set<String> chunks = ownerChunkKeys.get(owner);
+            if (chunks != null) {
+                chunks.remove(chunkKey);
+                if (chunks.isEmpty()) ownerChunkKeys.remove(owner, chunks);
             }
         }
-        return keys;
+
+        if (claimId == null) return;
+        Set<String> claimChunks = claimChunkKeys.get(claimId);
+        if (claimChunks == null) return;
+
+        claimChunks.remove(chunkKey);
+        if (claimChunks.isEmpty()) {
+            claimChunkKeys.remove(claimId, claimChunks);
+            UUID claimOwner = claimOwners.remove(claimId);
+            if (claimOwner != null) {
+                Set<String> claims = ownerClaimIds.get(claimOwner);
+                if (claims != null) {
+                    claims.remove(claimId);
+                    if (claims.isEmpty()) ownerClaimIds.remove(claimOwner, claims);
+                }
+            }
+        }
+    }
+
+    private void putClaimInMemory(String chunkKey, UUID owner) {
+        removeClaimChunkFromIndexes(chunkKey);
+        chunkOwners.put(chunkKey, owner);
+        indexClaimChunk(chunkKey, owner, computeClaimIdFromChunkKey(chunkKey, owner));
+    }
+
+    private void removeClaimFromMemory(String chunkKey) {
+        removeClaimChunkFromIndexes(chunkKey);
+        chunkOwners.remove(chunkKey);
+        chunkCustomNames.remove(chunkKey);
+    }
+
+    private List<String> getChunkKeysForClaimId(String claimId, UUID expectedOwner) {
+        if (claimId == null || claimId.isEmpty()) return Collections.emptyList();
+        if (expectedOwner != null && !expectedOwner.equals(claimOwners.get(claimId))) return Collections.emptyList();
+
+        Set<String> keys = claimChunkKeys.get(claimId);
+        return keys == null || keys.isEmpty() ? Collections.emptyList() : new ArrayList<>(keys);
     }
 
     public boolean ownsClaim(UUID owner, String claimId) {
@@ -172,6 +277,7 @@ public class ClaimManager {
         if (role == null) return false;
         String normalizedRole = normalizeTrustRole(role);
         String normalizedFlag = normalizeFlagName(flagName);
+        if (!SUPPORTED_FLAGS.contains(normalizedFlag)) return false;
 
         if (ROLE_COOWNER.equals(normalizedRole)) return true;
 
@@ -208,6 +314,18 @@ public class ClaimManager {
             case "always_rain" -> ClaimEnvironmentManager.FLAG_ALWAYS_RAIN;
             default -> normalized;
         };
+    }
+
+    public static boolean isSupportedFlagName(String flagName) {
+        return SUPPORTED_FLAGS.contains(normalizeFlagName(flagName));
+    }
+
+    private static String sanitizeClaimName(String customName) {
+        if (customName == null) return "";
+        String clean = ChatFormatting.stripFormatting(customName);
+        if (clean == null) return "";
+        clean = clean.replaceAll("[\\r\\n\\t\\x00-\\x1F\\x7F]", " ").trim();
+        return clean.length() <= MAX_CLAIM_NAME_LENGTH ? clean : clean.substring(0, MAX_CLAIM_NAME_LENGTH);
     }
 
     private static String getLegacyFlagName(String normalizedFlagName) {
@@ -259,6 +377,7 @@ public class ClaimManager {
 
     public boolean canEditFlag(UUID owner, UUID actor, String claimId, String flagName) {
         if (owner == null || actor == null || claimId == null || claimId.isEmpty()) return false;
+        if (!isSupportedFlagName(flagName)) return false;
         if (!ownsClaim(owner, claimId)) return false;
         if (owner.equals(actor)) return true;
         return roleCanEditFlag(getTrustRole(owner, actor, claimId), flagName);
@@ -266,13 +385,7 @@ public class ClaimManager {
 
     public UUID getClaimOwner(String claimId) {
         if (claimId == null || claimId.isEmpty()) return null;
-
-        for (Map.Entry<String, UUID> entry : chunkOwners.entrySet()) {
-            if (claimIdMatchesChunkKey(claimId, entry.getKey())) {
-                return entry.getValue();
-            }
-        }
-        return null;
+        return claimOwners.get(claimId);
     }
 
     private String getFlagStorageKey(UUID owner, String claimId) {
@@ -288,10 +401,7 @@ public class ClaimManager {
         if (owner == null || displayName == null || displayName.trim().isEmpty()) return claimIds;
 
         String targetName = displayName.trim();
-        for (Map.Entry<String, UUID> entry : chunkOwners.entrySet()) {
-            if (!owner.equals(entry.getValue())) continue;
-
-            String claimId = getClaimIdFromChunkKey(entry.getKey());
+        for (String claimId : ownerClaimIds.getOrDefault(owner, Collections.emptySet())) {
             String currentName = getClaimDisplayName(claimId);
             if (currentName != null && targetName.equals(currentName.trim())) {
                 claimIds.add(claimId);
@@ -451,6 +561,7 @@ public class ClaimManager {
     public void loadFromDatabase() {
         chunkOwners.clear();
         chunkCustomNames.clear();
+        clearClaimIndexes();
         playerNames.clear();
         boughtSlots.clear();
         trustedPlayers.clear();
@@ -475,7 +586,7 @@ public class ClaimManager {
                 }
             } catch (Exception e) {
                 System.err.println("[EvoProtection] Failed to initialize claim tables.");
-                e.printStackTrace();
+                throw new IllegalStateException("EvoProtection cannot start safely because the claim tables are unavailable.", e);
             }
 
             try {
@@ -487,7 +598,9 @@ public class ClaimManager {
                         eventPrice = rs.getDouble("price");
                     }
                 }
-            } catch (Exception e) { e.printStackTrace(); }
+            } catch (Exception e) {
+                throw new IllegalStateException("EvoProtection cannot load global claim data safely.", e);
+            }
 
             try {
                 Connection conn = DatabaseManager.get().getConnection();
@@ -504,7 +617,9 @@ public class ClaimManager {
                         }
                     }
                 }
-            } catch (Exception e) { e.printStackTrace(); }
+            } catch (Exception e) {
+                throw new IllegalStateException("EvoProtection cannot load claim settings and trust data safely.", e);
+            }
 
             try {
                 Connection conn = DatabaseManager.get().getConnection();
@@ -520,7 +635,9 @@ public class ClaimManager {
                         }
                     }
                 }
-            } catch (Exception e) { e.printStackTrace(); }
+            } catch (Exception e) {
+                throw new IllegalStateException("EvoProtection cannot load claim flags safely.", e);
+            }
 
             try {
                 Connection conn = DatabaseManager.get().getConnection();
@@ -536,11 +653,13 @@ public class ClaimManager {
                             chunkCustomNames.put(chunkKey, customName);
                         }
                     }
+                    rebuildClaimIndexes();
+                    migrateTrustsToClaimGroups();
                     System.out.println("[EvoProtection] Successfully loaded claims from MariaDB.");
                 }
             } catch (Exception e) {
                 System.err.println("[EvoProtection] Error loading claims from database.");
-                e.printStackTrace();
+                throw new IllegalStateException("EvoProtection stopped startup to avoid running with unprotected claims.", e);
             }
         }
     }
@@ -672,17 +791,9 @@ public class ClaimManager {
 
     public int getUsedPlots(UUID p) {
         if (!ProtectionConfig.get().isPlotMode) return getUsedSlots(p);
-        Set<String> uniquePlots = new HashSet<>();
-        for (Map.Entry<String, UUID> entry : chunkOwners.entrySet()) {
-            if (entry.getValue().equals(p)) {
-                String[] parts = entry.getKey().split(";", 3);
-                int cx = Integer.parseInt(parts[0]);
-                int cz = Integer.parseInt(parts[1]);
-                int[] coords = getPlotCoordsFromChunk(new ChunkPos(cx, cz));
-                uniquePlots.add(coords[0] + "," + coords[1] + "," + parts[2]);
-            }
-        }
-        return uniquePlots.size();
+        Set<String> claims = ownerClaimIds.get(p);
+        if (claims == null) return 0;
+        return (int) claims.stream().filter(claimId -> claimId.startsWith("plot;")).count();
     }
 
     public void drawPlotAndRoads(ServerLevel level, int plotX, int plotZ) {
@@ -739,6 +850,7 @@ public class ClaimManager {
 
     public boolean claimPlot(ServerPlayer player, int plotX, int plotZ, String customName) {
         String lang = getPlayerLanguage(player.getUUID());
+        customName = sanitizeClaimName(customName);
         int P = ProtectionConfig.get().plotSizeChunks;
         ChunkPos base = getPlotBaseChunk(plotX, plotZ);
         String dim = player.level().dimension().location().toString();
@@ -757,7 +869,7 @@ public class ClaimManager {
                 for(int j = 0; j < P; j++) {
                     ChunkPos cp = new ChunkPos(base.x + i, base.z + j);
                     String key = makeChunkKey(cp, dim);
-                    chunkOwners.put(key, player.getUUID());
+                    putClaimInMemory(key, player.getUUID());
                     chunkCustomNames.put(key, customName);
                     saveClaim(key, player.getUUID(), customName);
                 }
@@ -797,8 +909,7 @@ public class ClaimManager {
             String claimId = makePlotClaimId(plotX, plotZ, dim);
             removeClaimMetadata(player.getUUID(), claimId);
             for (String key : keysToRemove) {
-                chunkOwners.remove(key);
-                chunkCustomNames.remove(key);
+                removeClaimFromMemory(key);
                 deleteClaimFromDB(key);
             }
             syncToClient(player);
@@ -818,8 +929,7 @@ public class ClaimManager {
         String displayName = getClaimDisplayName(claimId);
         removeClaimMetadata(player.getUUID(), claimId);
         for (String key : keysToRemove) {
-            chunkOwners.remove(key);
-            chunkCustomNames.remove(key);
+            removeClaimFromMemory(key);
             deleteClaimFromDB(key);
         }
 
@@ -829,12 +939,51 @@ public class ClaimManager {
         return true;
     }
 
+    public boolean unclaimGroupById(ServerPlayer player, String claimId) {
+        UUID owner = player.getUUID();
+        if (!ownsClaim(owner, claimId)) return false;
+
+        String displayName = getClaimDisplayName(claimId);
+        Set<String> groupedClaimIds = getClaimIdsWithDisplayName(owner, displayName);
+        if (groupedClaimIds.isEmpty()) groupedClaimIds = Set.of(claimId);
+
+        Set<String> keysToRemove = new LinkedHashSet<>();
+        for (String groupedClaimId : groupedClaimIds) {
+            keysToRemove.addAll(getChunkKeysForClaimId(groupedClaimId, owner));
+        }
+        if (keysToRemove.isEmpty()) return false;
+
+        Map<String, Map<UUID, String>> trusts = trustedPlayers.get(owner);
+        if (trusts != null) {
+            trusts.remove(displayName);
+            for (String groupedClaimId : groupedClaimIds) trusts.remove(groupedClaimId);
+            savePlayerSettings(owner);
+        }
+
+        Map<String, Map<String, Boolean>> flags = claimFlags.get(owner);
+        if (flags != null) {
+            flags.remove(displayName);
+            for (String groupedClaimId : groupedClaimIds) flags.remove(groupedClaimId);
+            savePlayerFlags(owner);
+        }
+
+        for (String key : keysToRemove) {
+            removeClaimFromMemory(key);
+            deleteClaimFromDB(key);
+        }
+
+        syncToClient(player);
+        PlayerStatsManager.get().updateClaims(owner, player.getGameProfile().getName(), getUsedClaimCount(owner));
+        player.sendSystemMessage(Component.literal(LanguageManager.get(getPlayerLanguage(owner), "msg.claim.deleted", displayName)));
+        return true;
+    }
+
     public boolean unclaimByName(ServerPlayer player, String claimName) {
         for (Map.Entry<String, UUID> entry : chunkOwners.entrySet()) {
             if (entry.getValue().equals(player.getUUID())) {
                 String claimId = getClaimIdFromChunkKey(entry.getKey());
                 if (claimName.equals(getClaimDisplayName(claimId))) {
-                    return unclaimById(player, claimId);
+                    return unclaimGroupById(player, claimId);
                 }
             }
         }
@@ -843,6 +992,7 @@ public class ClaimManager {
 
     public boolean claimChunk(ServerPlayer player, ChunkPos pos, String customName) {
         String lang = getPlayerLanguage(player.getUUID());
+        customName = sanitizeClaimName(customName);
         if (ProtectionConfig.get().isPlotMode) {
             if (isRoadChunk(pos)) {
                 player.sendSystemMessage(Component.literal(LanguageManager.get(lang, "msg.road.reserved")));
@@ -856,7 +1006,7 @@ public class ClaimManager {
         if (chunkOwners.containsKey(key)) return false;
 
         if (getUsedSlots(player.getUUID()) < getMaxSlots(player.getUUID())) {
-            chunkOwners.put(key, player.getUUID());
+            putClaimInMemory(key, player.getUUID());
             playerNames.put(player.getUUID(), player.getGameProfile().getName());
             chunkCustomNames.put(key, customName);
             saveClaim(key, player.getUUID(), customName);
@@ -879,8 +1029,7 @@ public class ClaimManager {
         String key = makeChunkKey(pos, dim);
         if (player.getUUID().equals(chunkOwners.get(key))) {
             removeClaimMetadata(player.getUUID(), getClaimId(pos, dim));
-            chunkOwners.remove(key);
-            chunkCustomNames.remove(key);
+            removeClaimFromMemory(key);
             deleteClaimFromDB(key);
 
             syncToClient(player);
@@ -1013,8 +1162,7 @@ public class ClaimManager {
             removeClaimMetadata(owner, claimId);
 
             for (String removeKey : keysToRemove) {
-                chunkOwners.remove(removeKey);
-                chunkCustomNames.remove(removeKey);
+                removeClaimFromMemory(removeKey);
                 deleteClaimFromDB(removeKey);
             }
             PlayerStatsManager.get().updateClaims(owner, playerNames.getOrDefault(owner, "Necunoscut"), getUsedClaimCount(owner));
@@ -1029,13 +1177,12 @@ public class ClaimManager {
         boughtSlots.put(toId, currentToSlots + fromSlots);
         boughtSlots.remove(fromId);
 
-        for (Map.Entry<String, UUID> entry : chunkOwners.entrySet()) {
-            if (entry.getValue().equals(fromId)) {
-                String chunkKey = entry.getKey();
-                entry.setValue(toId);
-                saveClaim(chunkKey, toId, chunkCustomNames.getOrDefault(chunkKey, ""));
-            }
+        List<String> transferredChunkKeys = new ArrayList<>(ownerChunkKeys.getOrDefault(fromId, Collections.emptySet()));
+        for (String chunkKey : transferredChunkKeys) {
+            chunkOwners.put(chunkKey, toId);
+            saveClaim(chunkKey, toId, chunkCustomNames.getOrDefault(chunkKey, ""));
         }
+        rebuildClaimIndexes();
         Map<String, Map<UUID, String>> fromTrusts = trustedPlayers.remove(fromId);
         if (fromTrusts != null) {
             trustedPlayers.computeIfAbsent(toId, k -> new HashMap<>()).putAll(fromTrusts);
@@ -1058,8 +1205,9 @@ public class ClaimManager {
 
     public void adminClaim(ChunkPos pos, String dim, String name) {
         String key = makeChunkKey(pos, dim);
-        String displayTitle = (name == null || name.trim().isEmpty()) ? ADMIN_CLAIM_NAME : name.trim();
-        chunkOwners.put(key, ADMIN_UUID);
+        String cleanName = sanitizeClaimName(name);
+        String displayTitle = cleanName.isEmpty() ? ADMIN_CLAIM_NAME : cleanName;
+        putClaimInMemory(key, ADMIN_UUID);
         playerNames.put(ADMIN_UUID, "§6" + ADMIN_CLAIM_NAME);
         chunkCustomNames.put(key, displayTitle);
         saveClaim(key, ADMIN_UUID, displayTitle);
@@ -1104,6 +1252,7 @@ public class ClaimManager {
 
     public boolean setFlag(UUID owner, String claimId, String flagName, boolean state) {
         flagName = normalizeFlagName(flagName);
+        if (!SUPPORTED_FLAGS.contains(flagName)) return false;
         if (claimId == null || claimId.isEmpty() || !ownsClaim(owner, claimId)) return false;
         Map<String, Map<String, Boolean>> ownerFlags = claimFlags.computeIfAbsent(owner, k -> new HashMap<>());
         String storageKey = getFlagStorageKey(owner, claimId);
@@ -1143,6 +1292,7 @@ public class ClaimManager {
     public boolean getFlag(UUID owner, String claimId, String flagName) {
         if (owner == null || claimId == null || claimId.isEmpty()) return false;
         String normalized = normalizeFlagName(flagName);
+        if (!SUPPORTED_FLAGS.contains(normalized)) return false;
         Map<String, Boolean> flags = getFlagsForClaim(owner, claimId);
         if (flags.containsKey(normalized)) return flags.getOrDefault(normalized, false);
 
@@ -1152,31 +1302,65 @@ public class ClaimManager {
 
     public boolean addTrust(ServerPlayer owner, UUID target, String claimId, String role) {
         if (claimId == null || claimId.isEmpty() || !ownsClaim(owner.getUUID(), claimId)) return false;
-        Map<String, Map<UUID, String>> ownerTrusts = trustedPlayers.computeIfAbsent(owner.getUUID(), k -> new HashMap<>());
-        Map<UUID, String> trusts = ownerTrusts.get(claimId);
-        if (trusts == null) {
-            trusts = new HashMap<>(getTrustRoles(owner.getUUID(), claimId));
-            ownerTrusts.put(claimId, trusts);
-        }
+        UUID ownerId = owner.getUUID();
+        String groupKey = getClaimDisplayName(claimId);
+        Map<String, Map<UUID, String>> ownerTrusts = trustedPlayers.computeIfAbsent(ownerId, k -> new HashMap<>());
+        Map<UUID, String> trusts = collectAndRemoveGroupTrusts(ownerId, groupKey, ownerTrusts);
         trusts.put(target, normalizeTrustRole(role));
-        savePlayerSettings(owner.getUUID());
+        ownerTrusts.put(groupKey, trusts);
+        savePlayerSettings(ownerId);
         syncToClient(owner);
         return true;
     }
 
     public boolean removeTrust(ServerPlayer owner, UUID target, String claimId) {
         if (claimId == null || claimId.isEmpty() || !ownsClaim(owner.getUUID(), claimId)) return false;
-        if (trustedPlayers.containsKey(owner.getUUID())) {
-            Map<String, Map<UUID, String>> claimsTrusts = trustedPlayers.get(owner.getUUID());
-            String trustKey = claimsTrusts.containsKey(claimId) ? claimId : getClaimDisplayName(claimId);
-            if (claimsTrusts.containsKey(trustKey)) {
-                claimsTrusts.get(trustKey).remove(target);
-                savePlayerSettings(owner.getUUID());
-                syncToClient(owner);
-                return true;
+        UUID ownerId = owner.getUUID();
+        Map<String, Map<UUID, String>> ownerTrusts = trustedPlayers.get(ownerId);
+        if (ownerTrusts == null) return false;
+
+        String groupKey = getClaimDisplayName(claimId);
+        Map<UUID, String> trusts = collectAndRemoveGroupTrusts(ownerId, groupKey, ownerTrusts);
+        boolean removed = trusts.remove(target) != null;
+        if (trusts.isEmpty()) ownerTrusts.remove(groupKey);
+        else ownerTrusts.put(groupKey, trusts);
+
+        savePlayerSettings(ownerId);
+        syncToClient(owner);
+        return removed;
+    }
+
+    private Map<UUID, String> collectAndRemoveGroupTrusts(UUID owner, String groupKey,
+                                                           Map<String, Map<UUID, String>> ownerTrusts) {
+        Map<UUID, String> merged = new HashMap<>();
+        Map<UUID, String> groupedTrusts = ownerTrusts.remove(groupKey);
+        if (groupedTrusts != null) merged.putAll(groupedTrusts);
+
+        for (String groupedClaimId : getClaimIdsWithDisplayName(owner, groupKey)) {
+            Map<UUID, String> perClaimTrusts = ownerTrusts.remove(groupedClaimId);
+            if (perClaimTrusts != null) merged.putAll(perClaimTrusts);
+        }
+        return merged;
+    }
+
+    private void migrateTrustsToClaimGroups() {
+        for (Map.Entry<UUID, Map<String, Map<UUID, String>>> ownerEntry : new ArrayList<>(trustedPlayers.entrySet())) {
+            UUID owner = ownerEntry.getKey();
+            Map<String, Map<UUID, String>> original = ownerEntry.getValue();
+            if (original == null || original.isEmpty()) continue;
+
+            Map<String, Map<UUID, String>> grouped = new HashMap<>();
+            for (Map.Entry<String, Map<UUID, String>> trustEntry : original.entrySet()) {
+                String storedKey = trustEntry.getKey();
+                String groupKey = ownsClaim(owner, storedKey) ? getClaimDisplayName(storedKey) : storedKey;
+                grouped.computeIfAbsent(groupKey, ignored -> new HashMap<>()).putAll(trustEntry.getValue());
+            }
+
+            if (!grouped.equals(original)) {
+                trustedPlayers.put(owner, grouped);
+                savePlayerSettings(owner);
             }
         }
-        return false;
     }
 
     public boolean isTrusted(UUID owner, UUID visitor, String claimId) {
@@ -1217,7 +1401,8 @@ public class ClaimManager {
     }
 
     public int getUsedSlots(UUID p) {
-        return (int) chunkOwners.values().stream().filter(id -> id.equals(p)).count();
+        Set<String> chunks = ownerChunkKeys.get(p);
+        return chunks == null ? 0 : chunks.size();
     }
 
     public int getUsedClaimCount(UUID p) {
@@ -1253,11 +1438,13 @@ public class ClaimManager {
             Set<String> flagClaimIds = new HashSet<>();
             Map<String, String> claimDisplayNames = new HashMap<>();
             UUID visibleOwner = isAdminMap ? ADMIN_UUID : player.getUUID();
+            Set<String> processedClaimIds = new HashSet<>();
 
             for (Map.Entry<String, UUID> entry : chunkOwners.entrySet()) {
                 if (entry.getValue() != null) {
-                    boolean visibleClaim = entry.getValue().equals(visibleOwner);
                     String claimId = getClaimIdFromChunkKey(entry.getKey());
+                    if (!processedClaimIds.add(claimId)) continue;
+                    boolean visibleClaim = entry.getValue().equals(visibleOwner);
 
                     if (visibleClaim) {
                         allMyClaimIds.add(claimId);
@@ -1275,9 +1462,15 @@ public class ClaimManager {
 
             Map<String, Map<UUID, String>> trustedNamesPerClaim = new HashMap<>();
             Map<String, Map<UUID, String>> trustedRolesPerClaim = new HashMap<>();
-            for (String claimId : allMyClaimIds) {
+            List<String> sortedOwnedClaimIds = new ArrayList<>(allMyClaimIds);
+            sortedOwnedClaimIds.sort(Comparator.comparing((String id) -> claimDisplayNames.getOrDefault(id, id)).thenComparing(id -> id));
+            Set<String> processedTrustGroups = new HashSet<>();
+            for (String claimId : sortedOwnedClaimIds) {
+                String displayName = claimDisplayNames.getOrDefault(claimId, claimId);
+                if (!processedTrustGroups.add(displayName)) continue;
                 Map<UUID, String> mappedNames = new HashMap<>();
                 Map<UUID, String> roles = new HashMap<>(getTrustRoles(player.getUUID(), claimId));
+                if (roles.isEmpty()) continue;
                 for (UUID id : roles.keySet()) {
                     if (id != null && player.getServer() != null) {
                         try {
@@ -1293,7 +1486,8 @@ public class ClaimManager {
             for (String claimId : flagClaimIds) {
                 UUID flagOwner = isAdminMap ? ADMIN_UUID : getClaimOwner(claimId);
                 if (flagOwner != null) {
-                    myFlagsMap.put(claimId, new HashMap<>(getFlagsForClaim(flagOwner, claimId)));
+                    Map<String, Boolean> flags = new HashMap<>(getFlagsForClaim(flagOwner, claimId));
+                    if (!flags.isEmpty()) myFlagsMap.put(claimId, flags);
                     claimDisplayNames.put(claimId, getClaimDisplayName(claimId));
                 }
             }

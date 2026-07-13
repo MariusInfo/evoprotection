@@ -39,6 +39,8 @@ public class DeleteClaimScreen extends Screen {
 
     private void sortClaims() {
         this.myClaimIds.sort(Comparator.comparing(this::getDisplayName).thenComparing(id -> id));
+        Set<String> seenDisplayNames = new HashSet<>();
+        this.myClaimIds.removeIf(id -> !seenDisplayNames.add(getDisplayName(id)));
     }
 
     private String getDisplayName(String claimId) {

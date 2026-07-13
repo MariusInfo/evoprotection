@@ -30,6 +30,7 @@ import java.sql.ResultSetMetaData;
 import java.sql.Statement;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -47,10 +48,12 @@ public class ProtectionRoomManager {
     private static final int MAX_SELECTION_CHUNKS = 4096;
     private static final long RENT_INTERVAL_MS = 24L * 60L * 60L * 1000L;
     private static final long RENT_SWEEP_INTERVAL_MS = 60L * 1000L;
+    private static final double MAX_SIGN_INTERACTION_DISTANCE_SQR = 64.0D;
 
     private final Map<UUID, RoomSelection> selections = new ConcurrentHashMap<>();
     private final Map<UUID, PendingRoomSign> pendingSigns = new ConcurrentHashMap<>();
     private final Map<String, ProtectionRoom> rooms = new ConcurrentHashMap<>();
+    private final Map<String, Set<String>> roomIdsByChunk = new ConcurrentHashMap<>();
     private volatile long lastRentSweepAt = 0L;
     private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "EvoProtection-Rooms-DB");
@@ -126,6 +129,7 @@ public class ProtectionRoomManager {
         }
 
         rooms.put(room.roomId, room);
+        indexRoom(room);
         saveRoom(room);
         ItemStack contract = createContractPaper(room);
         if (!admin.getInventory().add(contract)) {
@@ -201,6 +205,7 @@ public class ProtectionRoomManager {
         }
 
         rooms.put(room.roomId, room);
+        indexRoom(room);
         saveRoom(room);
         pendingSigns.remove(admin.getUUID());
 
@@ -264,6 +269,10 @@ public class ProtectionRoomManager {
         ProtectionRoom room = rooms.get(roomId);
         if (room == null) {
             player.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] This room sign is no longer valid."));
+            return false;
+        }
+        if (!canUseRoomSign(player, room)) {
+            player.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] Stay near the valid room sign to use this menu."));
             return false;
         }
 
@@ -483,7 +492,12 @@ public class ProtectionRoomManager {
     }
 
     public ProtectionRoom getRoomAt(BlockPos pos, String dimension) {
-        for (ProtectionRoom room : rooms.values()) {
+        if (pos == null || dimension == null) return null;
+        Set<String> roomIds = roomIdsByChunk.get(roomChunkKey(pos.getX() >> 4, pos.getZ() >> 4, dimension));
+        if (roomIds == null || roomIds.isEmpty()) return null;
+        for (String roomId : roomIds) {
+            ProtectionRoom room = rooms.get(roomId);
+            if (room == null) continue;
             if (room.contains(pos, dimension)) {
                 return room;
             }
@@ -572,6 +586,7 @@ public class ProtectionRoomManager {
         }
 
         removeRoomSignBlock(room);
+        unindexRoom(room);
         rooms.remove(room.roomId);
         deleteRoom(room.roomId);
 
@@ -755,6 +770,54 @@ public class ProtectionRoomManager {
         return null;
     }
 
+    private boolean canUseRoomSign(ServerPlayer player, ProtectionRoom room) {
+        if (player == null || room == null) return false;
+        String dimension = player.level().dimension().location().toString();
+        if (!dimension.equals(room.signDimension)) return false;
+        BlockPos signPos = room.getSignPos();
+        if (signPos == null || !(player.level().getBlockEntity(signPos) instanceof SignBlockEntity)) return false;
+        return player.distanceToSqr(
+                signPos.getX() + 0.5D,
+                signPos.getY() + 0.5D,
+                signPos.getZ() + 0.5D
+        ) <= MAX_SIGN_INTERACTION_DISTANCE_SQR;
+    }
+
+    private String roomChunkKey(int chunkX, int chunkZ, String dimension) {
+        return dimension + "|" + ChunkPos.asLong(chunkX, chunkZ);
+    }
+
+    private void indexRoom(ProtectionRoom room) {
+        if (room == null || room.dimension == null) return;
+        int minChunkX = room.minX >> 4;
+        int maxChunkX = room.maxX >> 4;
+        int minChunkZ = room.minZ >> 4;
+        int maxChunkZ = room.maxZ >> 4;
+        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+                roomIdsByChunk.computeIfAbsent(roomChunkKey(chunkX, chunkZ, room.dimension), key -> ConcurrentHashMap.newKeySet())
+                        .add(room.roomId);
+            }
+        }
+    }
+
+    private void unindexRoom(ProtectionRoom room) {
+        if (room == null || room.dimension == null) return;
+        int minChunkX = room.minX >> 4;
+        int maxChunkX = room.maxX >> 4;
+        int minChunkZ = room.minZ >> 4;
+        int maxChunkZ = room.maxZ >> 4;
+        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+                String key = roomChunkKey(chunkX, chunkZ, room.dimension);
+                Set<String> roomIds = roomIdsByChunk.get(key);
+                if (roomIds == null) continue;
+                roomIds.remove(room.roomId);
+                if (roomIds.isEmpty()) roomIdsByChunk.remove(key, roomIds);
+            }
+        }
+    }
+
     private ProtectionRoom findRoomForPlayer(String playerName, String dimension, BlockPos adminPos) {
         if (playerName == null || playerName.isBlank()) return null;
         String needle = playerName.trim();
@@ -853,6 +916,7 @@ public class ProtectionRoomManager {
 
     private void loadFromDatabase() {
         rooms.clear();
+        roomIdsByChunk.clear();
         synchronized (DatabaseManager.get()) {
             try {
                 Connection conn = DatabaseManager.get().getConnection();
@@ -897,17 +961,19 @@ public class ProtectionRoomManager {
                     while (rs.next()) {
                         ProtectionRoom room = readRoom(rs);
                         rooms.put(room.roomId, room);
+                        indexRoom(room);
                     }
                 }
                 System.out.println("[EvoProtection] Loaded " + rooms.size() + " protection rooms.");
             } catch (Exception e) {
                 System.err.println("[EvoProtection] Failed to load protection rooms.");
-                e.printStackTrace();
+                throw new IllegalStateException("EvoProtection cannot start safely because protection rooms are unavailable.", e);
             }
         }
     }
 
     private void saveRoom(ProtectionRoom room) {
+        ProtectionRoom snapshot = room.copy();
         dbExecutor.execute(() -> {
             synchronized (DatabaseManager.get()) {
                 try {
@@ -928,11 +994,11 @@ public class ProtectionRoomManager {
                                     "contract_token=VALUES(contract_token), last_rent_charge_at=VALUES(last_rent_charge_at), " +
                                     "sign_dimension=VALUES(sign_dimension), sign_x=VALUES(sign_x), " +
                                     "sign_y=VALUES(sign_y), sign_z=VALUES(sign_z), created_at=VALUES(created_at), updated_at=VALUES(updated_at)")) {
-                        bindRoom(stmt, room);
+                        bindRoom(stmt, snapshot);
                         stmt.executeUpdate();
                     }
                 } catch (Exception e) {
-                    System.err.println("[EvoProtection] Failed to save protection room " + room.roomId + ".");
+                    System.err.println("[EvoProtection] Failed to save protection room " + snapshot.roomId + ".");
                     e.printStackTrace();
                 }
             }
@@ -1209,6 +1275,38 @@ public class ProtectionRoomManager {
 
         public boolean canRent() {
             return rentPrice >= 0.0D && (listingMode == RoomListingMode.BOTH || listingMode == RoomListingMode.RENT_ONLY);
+        }
+
+        private ProtectionRoom copy() {
+            ProtectionRoom copy = new ProtectionRoom();
+            copy.roomId = roomId;
+            copy.dimension = dimension;
+            copy.parentClaimId = parentClaimId;
+            copy.name = name;
+            copy.minX = minX;
+            copy.minY = minY;
+            copy.minZ = minZ;
+            copy.maxX = maxX;
+            copy.maxY = maxY;
+            copy.maxZ = maxZ;
+            copy.offerType = offerType;
+            copy.price = price;
+            copy.buyPrice = buyPrice;
+            copy.rentPrice = rentPrice;
+            copy.listingMode = listingMode;
+            copy.sellerUuid = sellerUuid;
+            copy.sellerName = sellerName;
+            copy.ownerUuid = ownerUuid;
+            copy.ownerName = ownerName;
+            copy.contractToken = contractToken;
+            copy.lastRentChargeAt = lastRentChargeAt;
+            copy.signDimension = signDimension;
+            copy.signX = signX;
+            copy.signY = signY;
+            copy.signZ = signZ;
+            copy.createdAt = createdAt;
+            copy.updatedAt = updatedAt;
+            return copy;
         }
     }
 }
