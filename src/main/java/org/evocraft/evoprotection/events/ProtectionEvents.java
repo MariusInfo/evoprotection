@@ -54,6 +54,14 @@ public class ProtectionEvents {
     private static final Map<UUID, String> lastChunkOwnerMap = new HashMap<>();
     private static final String SPAWN_RULE_CHECKED_TAG = "EvoProtectionSpawnRuleChecked";
 
+    private enum ClaimAction {
+        BLOCK_BREAK,
+        BLOCK_PLACE,
+        BLOCK_INTERACT,
+        WORLD_MODIFY,
+        FARMLAND_TRAMPLE
+    }
+
     // ==========================================
     // ⏳ PAYDAY & ANTI-AFK SYSTEM (PLOT/CREATIVE ONLY)
     // ==========================================
@@ -336,7 +344,7 @@ public class ProtectionEvents {
                             sendMsg(attacker);
                         }
                     } else if (!(target instanceof Monster)) {
-                        if (!ClaimManager.get().getFlag(owner, claimId, "public_build")) {
+                        if (!ClaimManager.get().getFlag(owner, claimId, "interact_entities")) {
                             event.setCanceled(true);
                             sendMsg(attacker);
                         }
@@ -684,7 +692,7 @@ public class ProtectionEvents {
                 return;
             }
 
-            if (!canInteract(player, event.getPos(), false, event.getLevel().getBlockState(event.getPos()))) {
+            if (!canInteract(player, event.getPos(), ClaimAction.BLOCK_BREAK, event.getLevel().getBlockState(event.getPos()))) {
                 event.setCanceled(true);
                 sendMsg(player);
 
@@ -700,7 +708,7 @@ public class ProtectionEvents {
     @SubscribeEvent(priority = EventPriority.HIGHEST)
     public static void onBlockPlace(BlockEvent.EntityPlaceEvent event) {
         if (event.getEntity() instanceof ServerPlayer player) {
-            if (!canInteract(player, event.getPos(), false, event.getPlacedBlock())) {
+            if (!canInteract(player, event.getPos(), ClaimAction.BLOCK_PLACE, event.getPlacedBlock())) {
                 event.setCanceled(true);
                 sendMsg(player);
 
@@ -766,8 +774,15 @@ public class ProtectionEvents {
                 String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
                 if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) {
 
-                    boolean isCarryOnAttempt = player.isCrouching() && player.getMainHandItem().isEmpty() && player.getOffhandItem().isEmpty();
+                    boolean isCarryOnAttempt = isCarryOnAttempt(player);
                     if (isCarryOnAttempt) {
+                        if (isFlyingCarryOnAttempt(player)) {
+                            event.setCanceled(true);
+                            event.setUseBlock(Event.Result.DENY);
+                            event.setUseItem(Event.Result.DENY);
+                            sendMsg(player, "§c[!] You cannot use Carry On while flying here!");
+                            return;
+                        }
                         if (!ClaimManager.get().getFlag(owner, claimId, "carry_on")) {
                             event.setCanceled(true);
                             event.setUseBlock(Event.Result.DENY);
@@ -775,12 +790,20 @@ public class ProtectionEvents {
                             sendMsg(player, "§c[!] You do not have permission to use Carry On here!");
                             return;
                         }
+                        String blockFlag = getBlockInteractionFlag(player, pos, state);
+                        if (!blockFlag.isEmpty() && !ClaimManager.get().getFlag(owner, claimId, blockFlag)) {
+                            event.setCanceled(true);
+                            event.setUseBlock(Event.Result.DENY);
+                            event.setUseItem(Event.Result.DENY);
+                            sendMsg(player);
+                            return;
+                        }
                         return;
                     }
                 }
             }
 
-            if (!canInteract(player, pos, true, state)) {
+            if (!canInteract(player, pos, ClaimAction.BLOCK_INTERACT, state)) {
                 event.setCanceled(true);
                 event.setUseBlock(Event.Result.DENY);
                 event.setUseItem(Event.Result.DENY);
@@ -809,7 +832,7 @@ public class ProtectionEvents {
             }
 
             BlockState state = player.level().getBlockState(event.getPos());
-            if (!canInteract(player, event.getPos(), false, state)) {
+            if (!canInteract(player, event.getPos(), ClaimAction.BLOCK_BREAK, state)) {
                 event.setCanceled(true);
             }
         }
@@ -846,8 +869,14 @@ public class ProtectionEvents {
                     && !ProtectionPermissions.canBypassClaim(player, owner)) {
                 String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
                 if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) {
-                    boolean isCarryOnAttempt = player.isCrouching() && player.getMainHandItem().isEmpty() && player.getOffhandItem().isEmpty();
+                    boolean isCarryOnAttempt = isCarryOnAttempt(player);
                     if (isCarryOnAttempt) {
+                        if (isFlyingCarryOnAttempt(player)) {
+                            event.setCanceled(true);
+                            event.setResult(Event.Result.DENY);
+                            sendMsg(player, "§c[!] You cannot use Carry On while flying here!");
+                            return;
+                        }
                         if (!ClaimManager.get().getFlag(owner, claimId, "carry_on")) {
                             event.setCanceled(true);
                             sendMsg(player, "§c[!] You do not have permission to use Carry On here!");
@@ -896,8 +925,14 @@ public class ProtectionEvents {
                     && !ProtectionPermissions.canBypassClaim(player, owner)) {
                 String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
                 if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) {
-                    boolean isCarryOnAttempt = player.isCrouching() && player.getMainHandItem().isEmpty() && player.getOffhandItem().isEmpty();
+                    boolean isCarryOnAttempt = isCarryOnAttempt(player);
                     if (isCarryOnAttempt) {
+                        if (isFlyingCarryOnAttempt(player)) {
+                            event.setCanceled(true);
+                            event.setResult(Event.Result.DENY);
+                            sendMsg(player, "§c[!] You cannot use Carry On while flying here!");
+                            return;
+                        }
                         if (!ClaimManager.get().getFlag(owner, claimId, "carry_on")) {
                             event.setCanceled(true);
                             sendMsg(player, "§c[!] You do not have permission to use Carry On here!");
@@ -923,13 +958,14 @@ public class ProtectionEvents {
                 BlockPos pos = blockHit.getBlockPos();
                 BlockPos placePos = pos.relative(blockHit.getDirection());
 
-                if (!canInteract(player, pos, false, null) || !canInteract(player, placePos, false, null)) {
+                if (!canInteract(player, pos, ClaimAction.WORLD_MODIFY, null)
+                        || !canInteract(player, placePos, ClaimAction.WORLD_MODIFY, null)) {
                     event.setCanceled(true);
                     event.setResult(Event.Result.DENY);
                     sendMsg(player);
                 }
             } else {
-                if (!canInteract(player, player.blockPosition(), false, null)) {
+                if (!canInteract(player, player.blockPosition(), ClaimAction.WORLD_MODIFY, null)) {
                     event.setCanceled(true);
                     event.setResult(Event.Result.DENY);
                 }
@@ -940,13 +976,13 @@ public class ProtectionEvents {
     @SubscribeEvent(priority = EventPriority.HIGHEST)
     public static void onFarmlandTrample(BlockEvent.FarmlandTrampleEvent event) {
         if (event.getEntity() instanceof ServerPlayer player) {
-            if (!canInteract(player, event.getPos(), false, null)) {
+            if (!canInteract(player, event.getPos(), ClaimAction.FARMLAND_TRAMPLE, null)) {
                 event.setCanceled(true);
             }
         }
     }
 
-    private static boolean canInteract(ServerPlayer player, BlockPos pos, boolean isRightClick, BlockState state) {
+    private static boolean canInteract(ServerPlayer player, BlockPos pos, ClaimAction action, BlockState state) {
         if (player.hasPermissions(2)) return true;
 
         ChunkPos chunkPos = new ChunkPos(pos);
@@ -975,40 +1011,80 @@ public class ProtectionEvents {
         if (ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) return true;
 
         boolean publicBuild = ClaimManager.get().getFlag(owner, claimId, "public_build");
-        if (!isRightClick) return publicBuild;
+        return switch (action) {
+            case BLOCK_BREAK -> publicBuild && !isInventoryBlock(player, pos, state);
+            case BLOCK_PLACE, WORLD_MODIFY -> publicBuild;
+            case FARMLAND_TRAMPLE -> false;
+            case BLOCK_INTERACT -> canUseBlock(player, pos, state, owner, claimId, publicBuild);
+        };
+    }
 
-        if (state != null) {
-            Block block = state.getBlock();
+    private static boolean isCarryOnAttempt(ServerPlayer player) {
+        return player.getMainHandItem().isEmpty()
+                && player.getOffhandItem().isEmpty()
+                && (player.isCrouching() || player.isShiftKeyDown());
+    }
 
-            boolean placingBlock = player.getMainHandItem().getItem() instanceof net.minecraft.world.item.BlockItem
-                    || player.getOffhandItem().getItem() instanceof net.minecraft.world.item.BlockItem;
-            if (publicBuild && placingBlock) return true;
+    private static boolean isFlyingCarryOnAttempt(ServerPlayer player) {
+        return player.getAbilities().flying;
+    }
 
-            boolean isDoor = block instanceof net.minecraft.world.level.block.DoorBlock ||
-                    block instanceof net.minecraft.world.level.block.TrapDoorBlock ||
-                    block instanceof net.minecraft.world.level.block.FenceGateBlock ||
-                    block instanceof net.minecraft.world.level.block.ButtonBlock ||
-                    block instanceof net.minecraft.world.level.block.LeverBlock;
-            if (isDoor) return ClaimManager.get().getFlag(owner, claimId, "doors");
+    private static boolean canUseBlock(ServerPlayer player, BlockPos pos, BlockState state, UUID owner, String claimId, boolean publicBuild) {
+        if (state == null) return false;
 
-            boolean isUse = block instanceof net.minecraft.world.level.block.CraftingTableBlock ||
-                    block instanceof net.minecraft.world.level.block.AnvilBlock ||
-                    block instanceof net.minecraft.world.level.block.EnchantmentTableBlock ||
-                    block instanceof net.minecraft.world.level.block.LoomBlock ||
-                    block instanceof net.minecraft.world.level.block.CartographyTableBlock ||
-                    block instanceof net.minecraft.world.level.block.SmithingTableBlock ||
-                    block instanceof net.minecraft.world.level.block.GrindstoneBlock ||
-                    block instanceof net.minecraft.world.level.block.StonecutterBlock ||
-                    block instanceof net.minecraft.world.level.block.LecternBlock ||
-                    block instanceof net.minecraft.world.level.block.BedBlock ||
-                    block instanceof net.minecraft.world.level.block.BellBlock;
-            if (isUse) return ClaimManager.get().getFlag(owner, claimId, "use");
-
-            boolean isContainer = state.getMenuProvider(player.level(), pos) != null
-                    || block instanceof net.minecraft.world.level.block.AbstractChestBlock;
-            if (isContainer) return ClaimManager.get().getFlag(owner, claimId, "chests");
+        String flag = getBlockInteractionFlag(player, pos, state);
+        if (!flag.isEmpty()) {
+            return ClaimManager.get().getFlag(owner, claimId, flag);
         }
 
-        return publicBuild;
+        return publicBuild && isHoldingBlock(player);
+    }
+
+    private static String getBlockInteractionFlag(ServerPlayer player, BlockPos pos, BlockState state) {
+        if (state == null) return "";
+
+        Block block = state.getBlock();
+        if (isDoorControl(block)) return "doors";
+        if (isUtilityBlock(block)) return "use";
+        if (isContainerAccessBlock(player, pos, state)) return "chests";
+        return "";
+    }
+
+    private static boolean isHoldingBlock(ServerPlayer player) {
+        return player.getMainHandItem().getItem() instanceof net.minecraft.world.item.BlockItem
+                || player.getOffhandItem().getItem() instanceof net.minecraft.world.item.BlockItem;
+    }
+
+    private static boolean isDoorControl(Block block) {
+        return block instanceof net.minecraft.world.level.block.DoorBlock
+                || block instanceof net.minecraft.world.level.block.TrapDoorBlock
+                || block instanceof net.minecraft.world.level.block.FenceGateBlock
+                || block instanceof net.minecraft.world.level.block.ButtonBlock
+                || block instanceof net.minecraft.world.level.block.LeverBlock;
+    }
+
+    private static boolean isUtilityBlock(Block block) {
+        return block instanceof net.minecraft.world.level.block.CraftingTableBlock
+                || block instanceof net.minecraft.world.level.block.AnvilBlock
+                || block instanceof net.minecraft.world.level.block.EnchantmentTableBlock
+                || block instanceof net.minecraft.world.level.block.LoomBlock
+                || block instanceof net.minecraft.world.level.block.CartographyTableBlock
+                || block instanceof net.minecraft.world.level.block.SmithingTableBlock
+                || block instanceof net.minecraft.world.level.block.GrindstoneBlock
+                || block instanceof net.minecraft.world.level.block.StonecutterBlock
+                || block instanceof net.minecraft.world.level.block.LecternBlock
+                || block instanceof net.minecraft.world.level.block.BedBlock
+                || block instanceof net.minecraft.world.level.block.BellBlock;
+    }
+
+    private static boolean isContainerAccessBlock(ServerPlayer player, BlockPos pos, BlockState state) {
+        return state.getMenuProvider(player.level(), pos) != null
+                || state.getBlock() instanceof net.minecraft.world.level.block.AbstractChestBlock;
+    }
+
+    private static boolean isInventoryBlock(ServerPlayer player, BlockPos pos, BlockState state) {
+        if (state == null) return false;
+        return player.level().getBlockEntity(pos) instanceof net.minecraft.world.Container
+                || state.getBlock() instanceof net.minecraft.world.level.block.AbstractChestBlock;
     }
 }
