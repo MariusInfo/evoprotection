@@ -1435,6 +1435,7 @@ public class ClaimManager {
             }
 
             Set<String> allMyClaimIds = new HashSet<>();
+            Set<String> trustClaimIds = new HashSet<>();
             Set<String> flagClaimIds = new HashSet<>();
             Map<String, String> claimDisplayNames = new HashMap<>();
             UUID visibleOwner = isAdminMap ? ADMIN_UUID : player.getUUID();
@@ -1448,6 +1449,7 @@ public class ClaimManager {
 
                     if (visibleClaim) {
                         allMyClaimIds.add(claimId);
+                        trustClaimIds.add(claimId);
                         flagClaimIds.add(claimId);
                         claimDisplayNames.put(claimId, getClaimDisplayName(claimId));
                     } else if (!isAdminMap) {
@@ -1460,16 +1462,31 @@ public class ClaimManager {
                 }
             }
 
+            if (!isAdminMap) {
+                for (ProtectionRoomManager.ProtectionRoom room : ProtectionRoomManager.get().getOwnedRooms(player.getUUID())) {
+                    String roomClientId = ProtectionRoomManager.get().getClientRoomId(room);
+                    trustClaimIds.add(roomClientId);
+                    claimDisplayNames.put(roomClientId, ProtectionRoomManager.get().getRoomDisplayName(room));
+                }
+                for (ProtectionRoomManager.ProtectionRoom room : ProtectionRoomManager.get().getFlagEditableRooms(player.getUUID())) {
+                    String roomClientId = ProtectionRoomManager.get().getClientRoomId(room);
+                    flagClaimIds.add(roomClientId);
+                    claimDisplayNames.put(roomClientId, ProtectionRoomManager.get().getRoomDisplayName(room));
+                }
+            }
+
             Map<String, Map<UUID, String>> trustedNamesPerClaim = new HashMap<>();
             Map<String, Map<UUID, String>> trustedRolesPerClaim = new HashMap<>();
-            List<String> sortedOwnedClaimIds = new ArrayList<>(allMyClaimIds);
-            sortedOwnedClaimIds.sort(Comparator.comparing((String id) -> claimDisplayNames.getOrDefault(id, id)).thenComparing(id -> id));
+            List<String> sortedTrustClaimIds = new ArrayList<>(trustClaimIds);
+            sortedTrustClaimIds.sort(Comparator.comparing((String id) -> claimDisplayNames.getOrDefault(id, id)).thenComparing(id -> id));
             Set<String> processedTrustGroups = new HashSet<>();
-            for (String claimId : sortedOwnedClaimIds) {
+            for (String claimId : sortedTrustClaimIds) {
                 String displayName = claimDisplayNames.getOrDefault(claimId, claimId);
-                if (!processedTrustGroups.add(displayName)) continue;
+                if (!ProtectionRoomManager.get().isClientRoomId(claimId) && !processedTrustGroups.add(displayName)) continue;
                 Map<UUID, String> mappedNames = new HashMap<>();
-                Map<UUID, String> roles = new HashMap<>(getTrustRoles(player.getUUID(), claimId));
+                Map<UUID, String> roles = ProtectionRoomManager.get().isClientRoomId(claimId)
+                        ? new HashMap<>(ProtectionRoomManager.get().getRoomTrustRolesByClientId(claimId))
+                        : new HashMap<>(getTrustRoles(player.getUUID(), claimId));
                 if (roles.isEmpty()) continue;
                 for (UUID id : roles.keySet()) {
                     if (id != null && player.getServer() != null) {
@@ -1484,6 +1501,10 @@ public class ClaimManager {
 
             Map<String, Map<String, Boolean>> myFlagsMap = new HashMap<>();
             for (String claimId : flagClaimIds) {
+                if (ProtectionRoomManager.get().isClientRoomId(claimId)) {
+                    myFlagsMap.put(claimId, ProtectionRoomManager.get().getRoomFlagsByClientId(claimId));
+                    continue;
+                }
                 UUID flagOwner = isAdminMap ? ADMIN_UUID : getClaimOwner(claimId);
                 if (flagOwner != null) {
                     Map<String, Boolean> flags = new HashMap<>(getFlagsForClaim(flagOwner, claimId));
@@ -1492,7 +1513,9 @@ public class ClaimManager {
                 }
             }
 
-            SyncData data = new SyncData(localClaims, trustedNamesPerClaim, trustedRolesPerClaim, myFlagsMap, allMyClaimIds, flagClaimIds, claimDisplayNames, getMaxSlots(player.getUUID()), getUsedClaimCount(player.getUUID()), getNextSlotCost(player.getUUID()));
+            SyncData data = new SyncData(localClaims, trustedNamesPerClaim, trustedRolesPerClaim, myFlagsMap,
+                    allMyClaimIds, trustClaimIds, flagClaimIds, claimDisplayNames,
+                    getMaxSlots(player.getUUID()), getUsedClaimCount(player.getUUID()), getNextSlotCost(player.getUUID()));
             PacketHandler.sendToPlayer(new PacketHandler.S2C_SyncClaimData(GSON.toJson(data), isAdminMap), player);
         } catch (Exception e) {
             e.printStackTrace();
@@ -1506,17 +1529,22 @@ public class ClaimManager {
         public Map<String, Map<UUID, String>> trustedRolesPerClaim;
         public Map<String, Map<String, Boolean>> myFlags;
         public Set<String> allClaimNames;
+        public Set<String> trustClaimNames;
         public Set<String> flagClaimNames;
         public Map<String, String> claimDisplayNames;
         public int maxSlots, usedSlots;
         public double nextSlotCost;
 
-        public SyncData(Map<String, ClientClaimInfo> m, Map<String, Map<UUID, String>> t, Map<String, Map<UUID, String>> roles, Map<String, Map<String, Boolean>> flags, Set<String> names, Set<String> flagNames, Map<String, String> displayNames, int max, int used, double cost) {
+        public SyncData(Map<String, ClientClaimInfo> m, Map<String, Map<UUID, String>> t,
+                        Map<String, Map<UUID, String>> roles, Map<String, Map<String, Boolean>> flags,
+                        Set<String> names, Set<String> trustNames, Set<String> flagNames,
+                        Map<String, String> displayNames, int max, int used, double cost) {
             this.map = m;
             this.trustedPerClaim = t;
             this.trustedRolesPerClaim = roles;
             this.myFlags = flags;
             this.allClaimNames = names;
+            this.trustClaimNames = trustNames;
             this.flagClaimNames = flagNames;
             this.claimDisplayNames = displayNames;
             this.maxSlots = max;

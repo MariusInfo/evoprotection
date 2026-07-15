@@ -475,6 +475,23 @@ public class PacketHandler {
             return handleC2S(supplier, player -> {
                     if (!ClaimManager.isSupportedFlagName(flagName)) return;
                     String lang = ClaimManager.get().getPlayerLanguage(player.getUUID());
+
+                    if (ProtectionRoomManager.get().isClientRoomId(claimName)) {
+                        if (isAdmin || !ProtectionRoomManager.get().setRoomFlag(player, claimName, flagName, state)) {
+                            return;
+                        }
+                        if (ClaimEnvironmentManager.isEnvironmentFlag(flagName)) {
+                            ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomByClientId(claimName);
+                            ClaimEnvironmentManager.get().refreshRoomPlayers(player.getServer(), room == null ? "" : room.roomId);
+                        }
+                        ClaimManager.get().syncToClient(player);
+                        String statusStr = state ? LanguageManager.get(lang, "gui.status.on") : LanguageManager.get(lang, "gui.status.off");
+                        ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomByClientId(claimName);
+                        String displayName = ProtectionRoomManager.get().getRoomDisplayName(room);
+                        player.sendSystemMessage(Component.literal(LanguageManager.get(lang, "msg.flag.updated", flagName, displayName, statusStr)));
+                        return;
+                    }
+
                     boolean adminAction = isAdmin && player.hasPermissions(2);
                     if (isAdmin && !adminAction) return;
 
@@ -634,8 +651,14 @@ public class PacketHandler {
                         }
 
                         if (targetUuid != null) {
-                            if (ClaimManager.get().addTrust(player, targetUuid, claimName, role)) {
-                                String displayName = ClaimManager.get().getClaimDisplayName(claimName);
+                            boolean roomTarget = ProtectionRoomManager.get().isClientRoomId(claimName);
+                            boolean updated = roomTarget
+                                    ? ProtectionRoomManager.get().addRoomTrust(player, targetUuid, claimName, role)
+                                    : ClaimManager.get().addTrust(player, targetUuid, claimName, role);
+                            if (updated) {
+                                String displayName = roomTarget
+                                        ? ProtectionRoomManager.get().getRoomDisplayName(ProtectionRoomManager.get().getRoomByClientId(claimName))
+                                        : ClaimManager.get().getClaimDisplayName(claimName);
                                 String roleLabel = LanguageManager.get(lang, "gui.trust.role." + ClaimManager.normalizeTrustRole(role));
                                 player.sendSystemMessage(Component.literal(LanguageManager.get(lang, "msg.trust.role_set", targetDisplay, roleLabel, displayName)));
                             }
@@ -644,8 +667,14 @@ public class PacketHandler {
                         }
                     } else {
                         try {
-                            if (ClaimManager.get().removeTrust(player, UUID.fromString(targetUuidStr), claimName)) {
-                                String displayName = ClaimManager.get().getClaimDisplayName(claimName);
+                            boolean roomTarget = ProtectionRoomManager.get().isClientRoomId(claimName);
+                            boolean removed = roomTarget
+                                    ? ProtectionRoomManager.get().removeRoomTrust(player, UUID.fromString(targetUuidStr), claimName)
+                                    : ClaimManager.get().removeTrust(player, UUID.fromString(targetUuidStr), claimName);
+                            if (removed) {
+                                String displayName = roomTarget
+                                        ? ProtectionRoomManager.get().getRoomDisplayName(ProtectionRoomManager.get().getRoomByClientId(claimName))
+                                        : ClaimManager.get().getClaimDisplayName(claimName);
                                 player.sendSystemMessage(Component.literal(LanguageManager.get(lang, "msg.trust.removed", displayName)));
                             }
                         } catch (Exception ignored) {}

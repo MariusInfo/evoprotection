@@ -43,7 +43,8 @@ public class TrustScreen extends Screen {
         if (data.trustedRolesPerClaim != null) this.trustedRolesPerClaim.putAll(data.trustedRolesPerClaim);
 
         this.myClaimIds.clear();
-        if (data.allClaimNames != null) this.myClaimIds.addAll(data.allClaimNames);
+        Set<String> trustClaims = data.trustClaimNames != null ? data.trustClaimNames : data.allClaimNames;
+        if (trustClaims != null) this.myClaimIds.addAll(trustClaims);
 
         this.claimDisplayNames.clear();
         if (data.claimDisplayNames != null) this.claimDisplayNames.putAll(data.claimDisplayNames);
@@ -56,7 +57,7 @@ public class TrustScreen extends Screen {
     private void sortClaims() {
         this.myClaimIds.sort(Comparator.comparing(this::getDisplayName).thenComparing(id -> id));
         Set<String> seenDisplayNames = new HashSet<>();
-        this.myClaimIds.removeIf(id -> !seenDisplayNames.add(getDisplayName(id)));
+        this.myClaimIds.removeIf(id -> !id.startsWith("room:") && !seenDisplayNames.add(getDisplayName(id)));
         if (currentClaimIndex >= myClaimIds.size()) {
             currentClaimIndex = Math.max(0, myClaimIds.size() - 1);
         }

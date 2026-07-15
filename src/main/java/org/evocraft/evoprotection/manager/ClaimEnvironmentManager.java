@@ -115,6 +115,17 @@ public class ClaimEnvironmentManager {
         }
     }
 
+    public void refreshRoomPlayers(MinecraftServer server, String roomId) {
+        if (server == null || roomId == null || roomId.isEmpty()) return;
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            String dim = player.level().dimension().location().toString();
+            ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(player.blockPosition(), dim);
+            if (room != null && roomId.equals(room.roomId)) {
+                forceRefreshPlayer(player);
+            }
+        }
+    }
+
     public void clearPlayer(ServerPlayer player) {
         if (player == null) return;
         removeInterceptor(player);
@@ -155,14 +166,16 @@ public class ClaimEnvironmentManager {
 
         String dim = player.level().dimension().location().toString();
         ChunkPos current = player.chunkPosition();
-        String locationKey = current.x + ";" + current.z + ";" + dim;
+        ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(player.blockPosition(), dim);
+        String roomId = room == null ? "" : room.roomId;
+        String locationKey = current.x + ";" + current.z + ";" + dim + ";" + roomId;
 
         if (!force && locationKey.equals(lastLocationKeys.get(player.getUUID()))) {
             return;
         }
 
         lastLocationKeys.put(player.getUUID(), locationKey);
-        EnvironmentState next = resolveEnvironment(player, current, dim);
+        EnvironmentState next = resolveEnvironment(player, current, dim, room);
         EnvironmentState previous = playerStates.get(player.getUUID());
         boolean shouldApply = force || previous != null || next.hasOverride();
 
@@ -183,7 +196,27 @@ public class ClaimEnvironmentManager {
         updateActiveTimeOverride(playerId, state);
     }
 
-    private EnvironmentState resolveEnvironment(ServerPlayer player, ChunkPos current, String dim) {
+    private EnvironmentState resolveEnvironment(ServerPlayer player, ChunkPos current, String dim,
+                                                ProtectionRoomManager.ProtectionRoom room) {
+        if (room != null && room.ownerUuid != null) {
+            int roomTimeMode = PacketHandler.S2C_EnvironmentOverride.MODE_NORMAL;
+            int roomWeatherMode = PacketHandler.S2C_EnvironmentOverride.MODE_NORMAL;
+
+            if (ProtectionRoomManager.get().getRoomFlag(room, FLAG_ALWAYS_MIDDLE_DAY)) {
+                roomTimeMode = PacketHandler.S2C_EnvironmentOverride.TIME_DAY;
+            } else if (ProtectionRoomManager.get().getRoomFlag(room, FLAG_ALWAYS_MIDDLE_NIGHT)) {
+                roomTimeMode = PacketHandler.S2C_EnvironmentOverride.TIME_NIGHT;
+            }
+
+            if (ProtectionRoomManager.get().getRoomFlag(room, FLAG_ALWAYS_SHINY)) {
+                roomWeatherMode = PacketHandler.S2C_EnvironmentOverride.WEATHER_CLEAR;
+            } else if (ProtectionRoomManager.get().getRoomFlag(room, FLAG_ALWAYS_RAIN)) {
+                roomWeatherMode = PacketHandler.S2C_EnvironmentOverride.WEATHER_RAIN;
+            }
+
+            return new EnvironmentState(room.ownerUuid, ProtectionRoomManager.get().getClientRoomId(room), roomTimeMode, roomWeatherMode);
+        }
+
         UUID owner = ClaimManager.get().getChunkOwner(current, dim);
         String claimId = owner != null ? ClaimManager.get().getClaimId(current, dim) : "";
 

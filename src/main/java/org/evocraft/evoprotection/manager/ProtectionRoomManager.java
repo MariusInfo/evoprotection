@@ -1,5 +1,9 @@
 package org.evocraft.evoprotection.manager;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
@@ -28,6 +32,10 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -42,6 +50,7 @@ public class ProtectionRoomManager {
     private static ProtectionRoomManager INSTANCE;
     private static final UUID ADMIN_UUID = new UUID(0, 0);
     private static final String ROOM_TABLE = "evoprotection_rooms";
+    private static final String CLIENT_ROOM_PREFIX = "room:";
     private static final String CONTRACT_TAG = "EvoProtectionRoomContract";
     private static final String CONTRACT_ROOM_ID = "EvoProtectionRoomId";
     private static final String CONTRACT_TOKEN = "EvoProtectionRoomToken";
@@ -49,6 +58,7 @@ public class ProtectionRoomManager {
     private static final long RENT_INTERVAL_MS = 24L * 60L * 60L * 1000L;
     private static final long RENT_SWEEP_INTERVAL_MS = 60L * 1000L;
     private static final double MAX_SIGN_INTERACTION_DISTANCE_SQR = 64.0D;
+    private static final Gson GSON = new Gson();
 
     private final Map<UUID, RoomSelection> selections = new ConcurrentHashMap<>();
     private final Map<UUID, PendingRoomSign> pendingSigns = new ConcurrentHashMap<>();
@@ -325,6 +335,8 @@ public class ProtectionRoomManager {
 
         room.ownerUuid = buyer.getUUID();
         room.ownerName = buyer.getGameProfile().getName();
+        room.flags.clear();
+        room.trustedRoles.clear();
         room.offerType = choice;
         room.price = price;
         room.contractToken = "";
@@ -336,6 +348,8 @@ public class ProtectionRoomManager {
         room.updatedAt = System.currentTimeMillis();
         saveRoom(room);
         updateRoomSign(room);
+        ClaimManager.get().syncToClient(buyer);
+        ClaimEnvironmentManager.get().refreshRoomPlayers(buyer.getServer(), room.roomId);
 
         buyer.sendSystemMessage(Component.literal("\u00A7a[EvoProtection] You "
                 + (choice == RoomOfferType.RENT ? "rented " : "bought ")
@@ -365,6 +379,8 @@ public class ProtectionRoomManager {
         room.updatedAt = System.currentTimeMillis();
         saveRoom(room);
         updateRoomSign(room);
+        ClaimManager.get().syncToClient(player);
+        ClaimEnvironmentManager.get().refreshRoomPlayers(player.getServer(), room.roomId);
 
         player.sendSystemMessage(Component.literal("\u00A7a[EvoProtection] Rent cancelled for \u00A7e" + roomName + "\u00A7a."));
         player.sendSystemMessage(Component.literal("\u00A77The room returned to \u00A7f" + room.sellerName + "\u00A77."));
@@ -403,6 +419,8 @@ public class ProtectionRoomManager {
         room.updatedAt = System.currentTimeMillis();
         saveRoom(room);
         updateRoomSign(room);
+        ClaimManager.get().syncToClient(player);
+        ClaimEnvironmentManager.get().refreshRoomPlayers(player.getServer(), room.roomId);
 
         player.sendSystemMessage(Component.literal("\u00A7a[EvoProtection] Room listed for "
                 + (listingMode == RoomListingMode.RENT_ONLY ? "rent" : "sale")
@@ -474,6 +492,8 @@ public class ProtectionRoomManager {
 
         room.ownerUuid = buyer.getUUID();
         room.ownerName = buyer.getGameProfile().getName();
+        room.flags.clear();
+        room.trustedRoles.clear();
         if (room.offerType == RoomOfferType.SELL) {
             room.sellerUuid = buyer.getUUID();
             room.sellerName = buyer.getGameProfile().getName();
@@ -482,6 +502,8 @@ public class ProtectionRoomManager {
         room.updatedAt = System.currentTimeMillis();
         saveRoom(room);
         stack.shrink(1);
+        ClaimManager.get().syncToClient(buyer);
+        ClaimEnvironmentManager.get().refreshRoomPlayers(buyer.getServer(), room.roomId);
 
         buyer.sendSystemMessage(Component.literal("\u00A7a[EvoProtection] You now own room \u00A7e" + room.name + "\u00A7a."));
         ServerPlayer seller = buyer.getServer() == null ? null : buyer.getServer().getPlayerList().getPlayer(previousSellerUuid);
@@ -506,10 +528,147 @@ public class ProtectionRoomManager {
     }
 
     public boolean canPlayerAccessRoom(ServerPlayer player, ProtectionRoom room) {
-        if (player.hasPermissions(2)) return true;
+        if (ProtectionPermissions.hasAdminAccess(player)) return true;
         if (room == null) return false;
-        if (room.ownerUuid != null) return room.ownerUuid.equals(player.getUUID());
+        if (room.ownerUuid != null) {
+            if (room.ownerUuid.equals(player.getUUID())) return true;
+            return ClaimManager.roleCanBuild(getRoomTrustRole(room, player.getUUID()));
+        }
         return room.sellerUuid != null && room.sellerUuid.equals(player.getUUID()) && !ADMIN_UUID.equals(room.sellerUuid);
+    }
+
+    public boolean canPlayerUseRoomFlag(ServerPlayer player, ProtectionRoom room, String flagName) {
+        return canPlayerAccessRoom(player, room) || getRoomFlag(room, flagName);
+    }
+
+    public boolean getRoomFlag(ProtectionRoom room, String flagName) {
+        if (room == null) return false;
+        String normalized = ClaimManager.normalizeFlagName(flagName);
+        if (!ClaimManager.isSupportedFlagName(normalized)) return false;
+        return room.flags.getOrDefault(normalized, false);
+    }
+
+    public List<ProtectionRoom> getOwnedRooms(UUID ownerUuid) {
+        if (ownerUuid == null) return List.of();
+        List<ProtectionRoom> ownedRooms = new ArrayList<>();
+        for (ProtectionRoom room : rooms.values()) {
+            if (ownerUuid.equals(room.ownerUuid)) {
+                ownedRooms.add(room);
+            }
+        }
+        ownedRooms.sort(Comparator
+                .comparing((ProtectionRoom room) -> room.name == null ? "" : room.name, String.CASE_INSENSITIVE_ORDER)
+                .thenComparing(room -> room.roomId));
+        return ownedRooms;
+    }
+
+    public List<ProtectionRoom> getFlagEditableRooms(UUID playerUuid) {
+        if (playerUuid == null) return List.of();
+        List<ProtectionRoom> editableRooms = new ArrayList<>();
+        for (ProtectionRoom room : rooms.values()) {
+            if (room.ownerUuid == null) continue;
+            if (room.ownerUuid.equals(playerUuid)
+                    || ClaimManager.roleCanEditAnyFlag(getRoomTrustRole(room, playerUuid))) {
+                editableRooms.add(room);
+            }
+        }
+        editableRooms.sort(Comparator
+                .comparing((ProtectionRoom room) -> room.name == null ? "" : room.name, String.CASE_INSENSITIVE_ORDER)
+                .thenComparing(room -> room.roomId));
+        return editableRooms;
+    }
+
+    public String getClientRoomId(ProtectionRoom room) {
+        return room == null ? "" : CLIENT_ROOM_PREFIX + room.roomId;
+    }
+
+    public boolean isClientRoomId(String value) {
+        return value != null && value.startsWith(CLIENT_ROOM_PREFIX);
+    }
+
+    public Map<String, Boolean> getRoomFlagsByClientId(String clientRoomId) {
+        ProtectionRoom room = getRoomByClientId(clientRoomId);
+        return room == null ? Map.of() : new HashMap<>(room.flags);
+    }
+
+    public Map<UUID, String> getRoomTrustRolesByClientId(String clientRoomId) {
+        ProtectionRoom room = getRoomByClientId(clientRoomId);
+        return room == null ? Map.of() : new HashMap<>(room.trustedRoles);
+    }
+
+    public String getRoomTrustRole(ProtectionRoom room, UUID playerUuid) {
+        if (room == null || playerUuid == null) return ClaimManager.ROLE_VISITOR;
+        if (playerUuid.equals(room.ownerUuid)) return ClaimManager.ROLE_COOWNER;
+        String role = room.trustedRoles.get(playerUuid);
+        return role == null ? ClaimManager.ROLE_VISITOR : ClaimManager.normalizeTrustRole(role);
+    }
+
+    public String getRoomDisplayName(ProtectionRoom room) {
+        if (room == null) return "Room";
+        String ownership = room.offerType == RoomOfferType.RENT ? "Rented" : "Owned";
+        return "Room: " + room.name + " (" + ownership + ")";
+    }
+
+    public boolean setRoomFlag(ServerPlayer player, String clientRoomId, String flagName, boolean state) {
+        if (player == null || !isClientRoomId(clientRoomId)) return false;
+        ProtectionRoom room = getRoomByClientId(clientRoomId);
+        String normalized = ClaimManager.normalizeFlagName(flagName);
+        if (room == null || room.ownerUuid == null) return false;
+        if (!ClaimManager.isSupportedFlagName(normalized)) return false;
+        if (!room.ownerUuid.equals(player.getUUID())
+                && !ClaimManager.roleCanEditFlag(getRoomTrustRole(room, player.getUUID()), normalized)) {
+            return false;
+        }
+
+        room.flags.put(normalized, state);
+        if (state) {
+            if (ClaimEnvironmentManager.FLAG_ALWAYS_MIDDLE_DAY.equals(normalized)) {
+                room.flags.put(ClaimEnvironmentManager.FLAG_ALWAYS_MIDDLE_NIGHT, false);
+            } else if (ClaimEnvironmentManager.FLAG_ALWAYS_MIDDLE_NIGHT.equals(normalized)) {
+                room.flags.put(ClaimEnvironmentManager.FLAG_ALWAYS_MIDDLE_DAY, false);
+            } else if (ClaimEnvironmentManager.FLAG_ALWAYS_SHINY.equals(normalized)) {
+                room.flags.put(ClaimEnvironmentManager.FLAG_ALWAYS_RAIN, false);
+            } else if (ClaimEnvironmentManager.FLAG_ALWAYS_RAIN.equals(normalized)) {
+                room.flags.put(ClaimEnvironmentManager.FLAG_ALWAYS_SHINY, false);
+            }
+        }
+        room.updatedAt = System.currentTimeMillis();
+        saveRoom(room);
+        return true;
+    }
+
+    public boolean addRoomTrust(ServerPlayer owner, UUID targetUuid, String clientRoomId, String role) {
+        if (owner == null || targetUuid == null) return false;
+        ProtectionRoom room = getRoomByClientId(clientRoomId);
+        if (room == null || room.ownerUuid == null || !room.ownerUuid.equals(owner.getUUID())) return false;
+        if (targetUuid.equals(owner.getUUID())) return false;
+
+        room.trustedRoles.put(targetUuid, ClaimManager.normalizeTrustRole(role));
+        room.updatedAt = System.currentTimeMillis();
+        saveRoom(room);
+        ClaimManager.get().syncToClient(owner);
+        ServerPlayer target = owner.getServer() == null ? null : owner.getServer().getPlayerList().getPlayer(targetUuid);
+        if (target != null) ClaimManager.get().syncToClient(target);
+        return true;
+    }
+
+    public boolean removeRoomTrust(ServerPlayer owner, UUID targetUuid, String clientRoomId) {
+        if (owner == null || targetUuid == null) return false;
+        ProtectionRoom room = getRoomByClientId(clientRoomId);
+        if (room == null || room.ownerUuid == null || !room.ownerUuid.equals(owner.getUUID())) return false;
+        if (room.trustedRoles.remove(targetUuid) == null) return false;
+
+        room.updatedAt = System.currentTimeMillis();
+        saveRoom(room);
+        ClaimManager.get().syncToClient(owner);
+        ServerPlayer target = owner.getServer() == null ? null : owner.getServer().getPlayerList().getPlayer(targetUuid);
+        if (target != null) ClaimManager.get().syncToClient(target);
+        return true;
+    }
+
+    public ProtectionRoom getRoomByClientId(String clientRoomId) {
+        if (!isClientRoomId(clientRoomId)) return null;
+        return rooms.get(clientRoomId.substring(CLIENT_ROOM_PREFIX.length()));
     }
 
     public void tickRentPayments(MinecraftServer server) {
@@ -534,8 +693,10 @@ public class ProtectionRoomManager {
                 room.updatedAt = now;
                 saveRoom(room);
                 updateRoomSign(room);
+                ClaimEnvironmentManager.get().refreshRoomPlayers(server, room.roomId);
 
                 if (renter != null) {
+                    ClaimManager.get().syncToClient(renter);
                     renter.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] Rent cancelled for \u00A7e"
                             + room.name + "\u00A7c because you do not have enough money."));
                 }
@@ -589,6 +750,7 @@ public class ProtectionRoomManager {
         unindexRoom(room);
         rooms.remove(room.roomId);
         deleteRoom(room.roomId);
+        ClaimEnvironmentManager.get().refreshAllPlayers(admin.getServer());
 
         admin.sendSystemMessage(Component.literal("\u00A7a[EvoProtection] Removed room \u00A7e" + room.name + "\u00A7a."));
         if (refundTarget != null) {
@@ -596,6 +758,7 @@ public class ProtectionRoomManager {
                     + "\u00A77 to \u00A7f" + refundName + "\u00A77."));
             ServerPlayer refunded = admin.getServer() == null ? null : admin.getServer().getPlayerList().getPlayer(refundTarget);
             if (refunded != null) {
+                ClaimManager.get().syncToClient(refunded);
                 refunded.sendSystemMessage(Component.literal("\u00A7a[EvoProtection] Room \u00A7e" + room.name
                         + "\u00A7a was removed. You received \u00A7e" + EvoCurrencyFormatter.formatWithCurrency(refund) + "\u00A7a back."));
             }
@@ -862,6 +1025,8 @@ public class ProtectionRoomManager {
     private void clearRoomOwner(ProtectionRoom room) {
         room.ownerUuid = null;
         room.ownerName = null;
+        room.flags.clear();
+        room.trustedRoles.clear();
     }
 
     private void removeRoomSignBlock(ProtectionRoom room) {
@@ -943,6 +1108,8 @@ public class ProtectionRoomManager {
                             "sign_x INT DEFAULT 0, " +
                             "sign_y INT DEFAULT 0, " +
                             "sign_z INT DEFAULT 0, " +
+                            "flags_json TEXT, " +
+                            "trust_json TEXT, " +
                             "created_at BIGINT, " +
                             "updated_at BIGINT)");
                 }
@@ -955,6 +1122,8 @@ public class ProtectionRoomManager {
                 ensureColumn(conn, "sign_x", "INT DEFAULT 0");
                 ensureColumn(conn, "sign_y", "INT DEFAULT 0");
                 ensureColumn(conn, "sign_z", "INT DEFAULT 0");
+                ensureColumn(conn, "flags_json", "TEXT");
+                ensureColumn(conn, "trust_json", "TEXT");
 
                 try (PreparedStatement stmt = conn.prepareStatement("SELECT * FROM " + ROOM_TABLE);
                      ResultSet rs = stmt.executeQuery()) {
@@ -982,8 +1151,8 @@ public class ProtectionRoomManager {
                             "INSERT INTO " + ROOM_TABLE + " (" +
                                     "room_id, dimension, parent_claim_id, name, min_x, min_y, min_z, max_x, max_y, max_z, " +
                                     "offer_type, price, buy_price, rent_price, listing_mode, seller_uuid, seller_name, owner_uuid, owner_name, contract_token, " +
-                                    "last_rent_charge_at, sign_dimension, sign_x, sign_y, sign_z, created_at, updated_at" +
-                                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                                    "last_rent_charge_at, sign_dimension, sign_x, sign_y, sign_z, flags_json, trust_json, created_at, updated_at" +
+                                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
                                     "ON DUPLICATE KEY UPDATE " +
                                     "dimension=VALUES(dimension), parent_claim_id=VALUES(parent_claim_id), name=VALUES(name), " +
                                     "min_x=VALUES(min_x), min_y=VALUES(min_y), min_z=VALUES(min_z), " +
@@ -993,7 +1162,8 @@ public class ProtectionRoomManager {
                                     "seller_name=VALUES(seller_name), owner_uuid=VALUES(owner_uuid), owner_name=VALUES(owner_name), " +
                                     "contract_token=VALUES(contract_token), last_rent_charge_at=VALUES(last_rent_charge_at), " +
                                     "sign_dimension=VALUES(sign_dimension), sign_x=VALUES(sign_x), " +
-                                    "sign_y=VALUES(sign_y), sign_z=VALUES(sign_z), created_at=VALUES(created_at), updated_at=VALUES(updated_at)")) {
+                                    "sign_y=VALUES(sign_y), sign_z=VALUES(sign_z), flags_json=VALUES(flags_json), trust_json=VALUES(trust_json), " +
+                                    "created_at=VALUES(created_at), updated_at=VALUES(updated_at)")) {
                         bindRoom(stmt, snapshot);
                         stmt.executeUpdate();
                     }
@@ -1048,8 +1218,10 @@ public class ProtectionRoomManager {
         stmt.setInt(23, room.signX);
         stmt.setInt(24, room.signY);
         stmt.setInt(25, room.signZ);
-        stmt.setLong(26, room.createdAt);
-        stmt.setLong(27, room.updatedAt);
+        stmt.setString(26, GSON.toJson(room.flags));
+        stmt.setString(27, GSON.toJson(room.trustedRoles));
+        stmt.setLong(28, room.createdAt);
+        stmt.setLong(29, room.updatedAt);
     }
 
     private ProtectionRoom readRoom(ResultSet rs) throws Exception {
@@ -1080,9 +1252,47 @@ public class ProtectionRoomManager {
         room.signX = readInt(rs, "sign_x", 0);
         room.signY = readInt(rs, "sign_y", 0);
         room.signZ = readInt(rs, "sign_z", 0);
+        room.flags.putAll(parseRoomFlags(readString(rs, "flags_json", "")));
+        room.trustedRoles.putAll(parseRoomTrustRoles(readString(rs, "trust_json", "")));
         room.createdAt = rs.getLong("created_at");
         room.updatedAt = rs.getLong("updated_at");
         return room;
+    }
+
+    private Map<String, Boolean> parseRoomFlags(String json) {
+        Map<String, Boolean> flags = new HashMap<>();
+        if (json == null || json.isBlank()) return flags;
+        try {
+            JsonObject object = JsonParser.parseString(json).getAsJsonObject();
+            for (Map.Entry<String, JsonElement> entry : object.entrySet()) {
+                String normalized = ClaimManager.normalizeFlagName(entry.getKey());
+                if (ClaimManager.isSupportedFlagName(normalized)
+                        && entry.getValue().isJsonPrimitive()
+                        && entry.getValue().getAsJsonPrimitive().isBoolean()) {
+                    flags.put(normalized, entry.getValue().getAsBoolean());
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return flags;
+    }
+
+    private Map<UUID, String> parseRoomTrustRoles(String json) {
+        Map<UUID, String> roles = new HashMap<>();
+        if (json == null || json.isBlank()) return roles;
+        try {
+            JsonObject object = JsonParser.parseString(json).getAsJsonObject();
+            for (Map.Entry<String, JsonElement> entry : object.entrySet()) {
+                if (!entry.getValue().isJsonPrimitive()) continue;
+                UUID playerUuid = UUID.fromString(entry.getKey());
+                String role = ClaimManager.normalizeTrustRole(entry.getValue().getAsString());
+                if (!ClaimManager.ROLE_VISITOR.equals(role)) {
+                    roles.put(playerUuid, role);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return roles;
     }
 
     private void ensureColumn(Connection conn, String column, String definition) {
@@ -1256,6 +1466,8 @@ public class ProtectionRoomManager {
         public int signZ;
         public long createdAt;
         public long updatedAt;
+        public final Map<String, Boolean> flags = new ConcurrentHashMap<>();
+        public final Map<UUID, String> trustedRoles = new ConcurrentHashMap<>();
 
         public boolean contains(BlockPos pos, String targetDimension) {
             if (!dimension.equals(targetDimension)) return false;
@@ -1306,6 +1518,8 @@ public class ProtectionRoomManager {
             copy.signZ = signZ;
             copy.createdAt = createdAt;
             copy.updatedAt = updatedAt;
+            copy.flags.putAll(flags);
+            copy.trustedRoles.putAll(trustedRoles);
             return copy;
         }
     }

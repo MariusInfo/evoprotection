@@ -124,14 +124,20 @@ public class ClaimMapScreen extends Screen {
 
         if (isPlot) {
             buttons.add(new CustomButton(LanguageManager.get("gui.button.friends"), finalX + 255, finalY + targetH - 30, 80, 20, () -> {
-                if (cachedData != null) this.minecraft.setScreen(new TrustScreen(this, cachedData.trustedPerClaim, cachedData.trustedRolesPerClaim, cachedData.allClaimNames, cachedData.claimDisplayNames));
+                if (cachedData != null) {
+                    Set<String> trustClaims = cachedData.trustClaimNames != null ? cachedData.trustClaimNames : cachedData.allClaimNames;
+                    this.minecraft.setScreen(new TrustScreen(this, cachedData.trustedPerClaim, cachedData.trustedRolesPerClaim, trustClaims, cachedData.claimDisplayNames));
+                }
             }));
             buttons.add(new CustomButton(LanguageManager.get("gui.button.delete"), finalX + 340, finalY + targetH - 30, 80, 20, () -> {
                 if (cachedData != null) this.minecraft.setScreen(new DeleteClaimScreen(this, cachedData.allClaimNames, cachedData.claimDisplayNames));
             }));
         } else {
             buttons.add(new CustomButton(LanguageManager.get("gui.button.friends"), finalX + 255, finalY + targetH - 30, 75, 20, () -> {
-                if (cachedData != null) this.minecraft.setScreen(new TrustScreen(this, cachedData.trustedPerClaim, cachedData.trustedRolesPerClaim, cachedData.allClaimNames, cachedData.claimDisplayNames));
+                if (cachedData != null) {
+                    Set<String> trustClaims = cachedData.trustClaimNames != null ? cachedData.trustClaimNames : cachedData.allClaimNames;
+                    this.minecraft.setScreen(new TrustScreen(this, cachedData.trustedPerClaim, cachedData.trustedRolesPerClaim, trustClaims, cachedData.claimDisplayNames));
+                }
             }));
             buttons.add(new CustomButton(LanguageManager.get("gui.button.settings"), finalX + 335, finalY + targetH - 30, 75, 20, () -> {
                 if (cachedData != null) {

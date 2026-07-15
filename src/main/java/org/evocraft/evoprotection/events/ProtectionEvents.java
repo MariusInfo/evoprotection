@@ -88,9 +88,13 @@ public class ProtectionEvents {
         return registryName != null && registryName.getNamespace().equals("mowziesmobs");
     }
 
-    private static boolean canUseMowzieItemAt(ServerPlayer player, ChunkPos targetChunk) {
+    private static boolean canUseMowzieItemAt(ServerPlayer player, BlockPos targetPos) {
         if (player.hasPermissions(2)) return true;
         String dim = player.level().dimension().location().toString();
+        ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(targetPos, dim);
+        if (room != null) return ProtectionRoomManager.get().canPlayerAccessRoom(player, room);
+
+        ChunkPos targetChunk = new ChunkPos(targetPos);
         UUID owner = ClaimManager.get().getChunkOwner(targetChunk, dim);
 
         if (owner == null) return true; // Can use in wilderness
@@ -102,7 +106,7 @@ public class ProtectionEvents {
     }
 
     private static boolean canUseMowzieItem(ServerPlayer player) {
-        return canUseMowzieItemAt(player, player.chunkPosition());
+        return canUseMowzieItemAt(player, player.blockPosition());
     }
 
     private static void sendMsg(ServerPlayer player) {
@@ -134,14 +138,29 @@ public class ProtectionEvents {
     private static boolean isMobSpawnAllowed(net.minecraft.world.entity.Mob entity,
                                              MobSpawnType spawnType,
                                              boolean hasSpawner) {
+        if (isManualSpawn(spawnType)) return true;
+
         ChunkPos chunkPos = new ChunkPos(entity.blockPosition());
         String dimension = entity.level().dimension().location().toString();
-        UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dimension);
-        if (owner == null || isManualSpawn(spawnType)) return true;
-
-        String claimId = ClaimManager.get().getClaimId(chunkPos, dimension);
         boolean fromSpawner = hasSpawner || spawnType == MobSpawnType.SPAWNER;
         boolean isMonster = entity instanceof Monster || entity.getType().getCategory() == MobCategory.MONSTER;
+        ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(entity.blockPosition(), dimension);
+        if (room != null && room.ownerUuid != null) {
+            if (isMonster) {
+                return ProtectionRoomManager.get().getRoomFlag(room,
+                        fromSpawner ? "spawner_monsters" : "natural_monsters");
+            }
+            if (isAnimalMob(entity)) {
+                return ProtectionRoomManager.get().getRoomFlag(room,
+                        fromSpawner ? "spawner_animals" : "natural_animals");
+            }
+            return true;
+        }
+
+        UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dimension);
+        if (owner == null) return true;
+
+        String claimId = ClaimManager.get().getClaimId(chunkPos, dimension);
 
         if (isMonster) {
             return ClaimManager.get().getFlag(owner, claimId,
@@ -289,14 +308,24 @@ public class ProtectionEvents {
             net.minecraft.world.entity.Entity target = event.getTarget();
             String dim = attacker.level().dimension().location().toString();
 
-            ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(target.blockPosition(), dim);
-            if (room != null) {
-                if (target instanceof Player) {
+            if (target instanceof Player) {
+                if (!isPvpAllowedAt(attacker, attacker.blockPosition())
+                        || !isPvpAllowedAt(attacker, target.blockPosition())) {
                     event.setCanceled(true);
                     sendMsg(attacker);
-                    return;
                 }
-                if (!ProtectionRoomManager.get().canPlayerAccessRoom(attacker, room)) {
+                return;
+            }
+
+            ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(target.blockPosition(), dim);
+            if (room != null) {
+                if (target instanceof net.minecraft.world.entity.Mob mob && isAnimalMob(mob)) {
+                    if (!ProtectionRoomManager.get().canPlayerUseRoomFlag(attacker, room, "hurt_animals")) {
+                        event.setCanceled(true);
+                        sendMsg(attacker);
+                    }
+                } else if (!(target instanceof Monster)
+                        && !ProtectionRoomManager.get().canPlayerUseRoomFlag(attacker, room, "interact_entities")) {
                     event.setCanceled(true);
                     sendMsg(attacker);
                 }
@@ -358,31 +387,9 @@ public class ProtectionEvents {
     public static void onLivingAttack(LivingAttackEvent event) {
         if (event.getEntity() instanceof ServerPlayer targetPlayer) {
             if (event.getSource().getEntity() instanceof ServerPlayer attackerPlayer) {
-                if (attackerPlayer.hasPermissions(2)) return;
-
-                String dim = targetPlayer.level().dimension().location().toString();
-                ChunkPos attackerChunk = attackerPlayer.chunkPosition();
-                ChunkPos targetChunk = new ChunkPos(targetPlayer.blockPosition());
-
-                UUID attackerZoneOwner = ClaimManager.get().getChunkOwner(attackerChunk, dim);
-                UUID targetZoneOwner = ClaimManager.get().getChunkOwner(targetChunk, dim);
-
-                if (attackerZoneOwner != null
-                        && !ProtectionPermissions.canBypassClaim(attackerPlayer, attackerZoneOwner)) {
-                    String claimId = ClaimManager.get().getClaimId(attackerChunk, dim);
-                    if (!ClaimManager.get().getFlag(attackerZoneOwner, claimId, "pvp")) {
-                        event.setCanceled(true);
-                        return;
-                    }
-                }
-
-                if (targetZoneOwner != null
-                        && !ProtectionPermissions.canBypassClaim(attackerPlayer, targetZoneOwner)) {
-                    String claimId = ClaimManager.get().getClaimId(targetChunk, dim);
-                    if (!ClaimManager.get().getFlag(targetZoneOwner, claimId, "pvp")) {
-                        event.setCanceled(true);
-                        return;
-                    }
+                if (!isPvpAllowedAt(attackerPlayer, attackerPlayer.blockPosition())
+                        || !isPvpAllowedAt(attackerPlayer, targetPlayer.blockPosition())) {
+                    event.setCanceled(true);
                 }
             }
         }
@@ -506,8 +513,16 @@ public class ProtectionEvents {
 
         if (event.getEntity() instanceof net.minecraft.world.entity.LightningBolt ||
                 event.getEntity() instanceof net.minecraft.world.entity.item.PrimedTnt) {
-            ChunkPos pos = new ChunkPos(event.getEntity().blockPosition());
+            BlockPos blockPos = event.getEntity().blockPosition();
+            ChunkPos pos = new ChunkPos(blockPos);
             String dim = event.getLevel().dimension().location().toString();
+            ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(blockPos, dim);
+            if (room != null && room.ownerUuid != null) {
+                if (!ProtectionRoomManager.get().getRoomFlag(room, "explosions")) {
+                    event.setCanceled(true);
+                }
+                return;
+            }
             UUID owner = ClaimManager.get().getChunkOwner(pos, dim);
 
             if (owner != null) {
@@ -565,7 +580,7 @@ public class ProtectionEvents {
 
             ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(event.getItem().blockPosition(), dim);
             if (room != null) {
-                if (!ProtectionRoomManager.get().canPlayerAccessRoom(player, room)) {
+                if (!ProtectionRoomManager.get().canPlayerUseRoomFlag(player, room, "item_pickup")) {
                     event.setCanceled(true);
                 }
                 return;
@@ -610,6 +625,10 @@ public class ProtectionEvents {
         String dim = level.dimension().location().toString();
 
         event.getAffectedBlocks().removeIf(pos -> {
+            ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(pos, dim);
+            if (room != null && room.ownerUuid != null) {
+                return !ProtectionRoomManager.get().getRoomFlag(room, "explosions");
+            }
             ChunkPos chunkPos = new ChunkPos(pos);
             UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dim);
             if (owner != null) {
@@ -622,6 +641,10 @@ public class ProtectionEvents {
         event.getAffectedEntities().removeIf(entity -> {
             if (entity instanceof Player || entity instanceof Monster) return false;
 
+            ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(entity.blockPosition(), dim);
+            if (room != null && room.ownerUuid != null) {
+                return !ProtectionRoomManager.get().getRoomFlag(room, "explosions");
+            }
             ChunkPos chunkPos = new ChunkPos(entity.blockPosition());
             UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dim);
             if (owner != null) {
@@ -729,6 +752,7 @@ public class ProtectionEvents {
             ChunkPos chunkPos = new ChunkPos(pos);
             String dim = player.level().dimension().location().toString();
             UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dim);
+            ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(pos, dim);
 
             if (ProtectionRoomManager.get().handleRoomSignInteract(player, pos)) {
                 event.setCanceled(true);
@@ -755,7 +779,7 @@ public class ProtectionEvents {
 
             // THE ULTIMATE MOWZIE'S MOBS BARRIER (TOTALLY STOPS THE PHYSICAL CLICK EVENT)
             if (isForbiddenItem(player.getMainHandItem()) || isForbiddenItem(player.getOffhandItem())) {
-                if (!canUseMowzieItemAt(player, chunkPos)) {
+                if (!canUseMowzieItemAt(player, pos)) {
                     event.setCanceled(true);
                     event.setUseBlock(Event.Result.DENY);
                     event.setUseItem(Event.Result.DENY);
@@ -769,7 +793,34 @@ public class ProtectionEvents {
                 }
             }
 
-            if (owner != null && !owner.equals(player.getUUID())
+            if (room != null && !ProtectionRoomManager.get().canPlayerAccessRoom(player, room)
+                    && isCarryOnAttempt(player)) {
+                if (isFlyingCarryOnAttempt(player)) {
+                    event.setCanceled(true);
+                    event.setUseBlock(Event.Result.DENY);
+                    event.setUseItem(Event.Result.DENY);
+                    sendMsg(player, "Â§c[!] You cannot use Carry On while flying here!");
+                    return;
+                }
+                if (!ProtectionRoomManager.get().getRoomFlag(room, "carry_on")) {
+                    event.setCanceled(true);
+                    event.setUseBlock(Event.Result.DENY);
+                    event.setUseItem(Event.Result.DENY);
+                    sendMsg(player, "Â§c[!] You do not have permission to use Carry On here!");
+                    return;
+                }
+                String blockFlag = getBlockInteractionFlag(player, pos, state);
+                if (!blockFlag.isEmpty() && !ProtectionRoomManager.get().getRoomFlag(room, blockFlag)) {
+                    event.setCanceled(true);
+                    event.setUseBlock(Event.Result.DENY);
+                    event.setUseItem(Event.Result.DENY);
+                    sendMsg(player);
+                    return;
+                }
+                return;
+            }
+
+            if (room == null && owner != null && !owner.equals(player.getUUID())
                     && !ProtectionPermissions.canBypassClaim(player, owner)) {
                 String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
                 if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) {
@@ -818,7 +869,7 @@ public class ProtectionEvents {
             ChunkPos chunkPos = new ChunkPos(event.getPos());
 
             if (isForbiddenItem(player.getMainHandItem()) || isForbiddenItem(player.getOffhandItem())) {
-                if (!canUseMowzieItemAt(player, chunkPos)) {
+                if (!canUseMowzieItemAt(player, event.getPos())) {
                     event.setCanceled(true);
                     player.stopUsingItem();
                     sendMsg(player, "§c[!] You cannot use the Glove on this land!");
@@ -847,7 +898,7 @@ public class ProtectionEvents {
 
             ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(event.getTarget().blockPosition(), dim);
             if (room != null) {
-                if (!ProtectionRoomManager.get().canPlayerAccessRoom(player, room)) {
+                if (!canInteractWithRoomEntity(player, room)) {
                     event.setCanceled(true);
                     event.setResult(Event.Result.DENY);
                     sendMsg(player);
@@ -856,7 +907,7 @@ public class ProtectionEvents {
             }
 
             if (isForbiddenItem(player.getMainHandItem()) || isForbiddenItem(player.getOffhandItem())) {
-                if (!canUseMowzieItemAt(player, chunkPos)) {
+                if (!canUseMowzieItemAt(player, event.getTarget().blockPosition())) {
                     event.setCanceled(true);
                     event.setResult(Event.Result.DENY);
                     player.stopUsingItem();
@@ -903,7 +954,7 @@ public class ProtectionEvents {
 
             ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(event.getTarget().blockPosition(), dim);
             if (room != null) {
-                if (!ProtectionRoomManager.get().canPlayerAccessRoom(player, room)) {
+                if (!canInteractWithRoomEntity(player, room)) {
                     event.setCanceled(true);
                     event.setResult(Event.Result.DENY);
                     sendMsg(player);
@@ -912,7 +963,7 @@ public class ProtectionEvents {
             }
 
             if (isForbiddenItem(player.getMainHandItem()) || isForbiddenItem(player.getOffhandItem())) {
-                if (!canUseMowzieItemAt(player, chunkPos)) {
+                if (!canUseMowzieItemAt(player, event.getTarget().blockPosition())) {
                     event.setCanceled(true);
                     event.setResult(Event.Result.DENY);
                     player.stopUsingItem();
@@ -1000,7 +1051,15 @@ public class ProtectionEvents {
 
         ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(pos, dim);
         if (room != null) {
-            return ProtectionRoomManager.get().canPlayerAccessRoom(player, room);
+            if (ProtectionRoomManager.get().canPlayerAccessRoom(player, room)) return true;
+
+            boolean roomPublicBuild = ProtectionRoomManager.get().getRoomFlag(room, "public_build");
+            return switch (action) {
+                case BLOCK_BREAK -> roomPublicBuild && !isInventoryBlock(player, pos, state);
+                case BLOCK_PLACE, WORLD_MODIFY -> roomPublicBuild;
+                case FARMLAND_TRAMPLE -> false;
+                case BLOCK_INTERACT -> canUseRoomBlock(player, pos, state, room, roomPublicBuild);
+            };
         }
 
         if (ProtectionPermissions.canBypassClaim(player, owner)) return true;
@@ -1019,6 +1078,30 @@ public class ProtectionEvents {
         };
     }
 
+    private static boolean isPvpAllowedAt(ServerPlayer player, BlockPos pos) {
+        if (player.hasPermissions(2)) return true;
+        String dim = player.level().dimension().location().toString();
+        ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(pos, dim);
+        if (room != null && room.ownerUuid != null) {
+            return ProtectionRoomManager.get().getRoomFlag(room, "pvp");
+        }
+
+        ChunkPos chunkPos = new ChunkPos(pos);
+        UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dim);
+        if (owner == null || ProtectionPermissions.canBypassClaim(player, owner)) return true;
+        String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
+        return ClaimManager.get().getFlag(owner, claimId, "pvp");
+    }
+
+    private static boolean canInteractWithRoomEntity(ServerPlayer player, ProtectionRoomManager.ProtectionRoom room) {
+        if (ProtectionRoomManager.get().canPlayerAccessRoom(player, room)) return true;
+        if (isCarryOnAttempt(player)) {
+            return !isFlyingCarryOnAttempt(player)
+                    && ProtectionRoomManager.get().getRoomFlag(room, "carry_on");
+        }
+        return ProtectionRoomManager.get().getRoomFlag(room, "interact_entities");
+    }
+
     private static boolean isCarryOnAttempt(ServerPlayer player) {
         return player.getMainHandItem().isEmpty()
                 && player.getOffhandItem().isEmpty()
@@ -1035,6 +1118,18 @@ public class ProtectionEvents {
         String flag = getBlockInteractionFlag(player, pos, state);
         if (!flag.isEmpty()) {
             return ClaimManager.get().getFlag(owner, claimId, flag);
+        }
+
+        return publicBuild && isHoldingBlock(player);
+    }
+
+    private static boolean canUseRoomBlock(ServerPlayer player, BlockPos pos, BlockState state,
+                                           ProtectionRoomManager.ProtectionRoom room, boolean publicBuild) {
+        if (state == null) return false;
+
+        String flag = getBlockInteractionFlag(player, pos, state);
+        if (!flag.isEmpty()) {
+            return ProtectionRoomManager.get().getRoomFlag(room, flag);
         }
 
         return publicBuild && isHoldingBlock(player);
@@ -1064,7 +1159,8 @@ public class ProtectionEvents {
     }
 
     private static boolean isUtilityBlock(Block block) {
-        return block instanceof net.minecraft.world.level.block.CraftingTableBlock
+        return isAppleCratesBlock(block)
+                || block instanceof net.minecraft.world.level.block.CraftingTableBlock
                 || block instanceof net.minecraft.world.level.block.AnvilBlock
                 || block instanceof net.minecraft.world.level.block.EnchantmentTableBlock
                 || block instanceof net.minecraft.world.level.block.LoomBlock
@@ -1075,6 +1171,13 @@ public class ProtectionEvents {
                 || block instanceof net.minecraft.world.level.block.LecternBlock
                 || block instanceof net.minecraft.world.level.block.BedBlock
                 || block instanceof net.minecraft.world.level.block.BellBlock;
+    }
+
+    private static boolean isAppleCratesBlock(Block block) {
+        ResourceLocation blockId = ForgeRegistries.BLOCKS.getKey(block);
+        return blockId != null
+                && "applecrates".equals(blockId.getNamespace())
+                && blockId.getPath().endsWith("_crate");
     }
 
     private static boolean isContainerAccessBlock(ServerPlayer player, BlockPos pos, BlockState state) {
