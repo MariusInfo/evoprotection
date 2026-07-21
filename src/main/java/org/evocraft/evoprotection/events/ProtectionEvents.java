@@ -22,6 +22,7 @@ import net.minecraft.world.phys.HitResult;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.EntityJoinLevelEvent;
 import net.minecraftforge.event.entity.EntityMobGriefingEvent;
+import net.minecraftforge.event.entity.ProjectileImpactEvent;
 import net.minecraftforge.event.entity.living.LivingAttackEvent;
 import net.minecraftforge.event.entity.living.LivingEntityUseItemEvent;
 import net.minecraftforge.event.entity.player.AttackEntityEvent;
@@ -37,6 +38,7 @@ import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.registries.ForgeRegistries;
 import net.minecraft.resources.ResourceLocation;
 import org.evocraft.evoprotection.EvoProtection;
+import org.evocraft.evoprotection.compat.CarryOnCompat;
 import org.evocraft.evoprotection.manager.ClaimEnvironmentManager;
 import org.evocraft.evoprotection.manager.ClaimManager;
 import org.evocraft.evoprotection.manager.ProtectionRoomManager;
@@ -687,6 +689,25 @@ public class ProtectionEvents {
         });
     }
 
+    @SubscribeEvent(priority = EventPriority.HIGHEST)
+    public static void onSupplementariesCannonImpact(ProjectileImpactEvent event) {
+        Level level = event.getProjectile().level();
+        if (level.isClientSide()) return;
+
+        ResourceLocation projectileId = ForgeRegistries.ENTITY_TYPES.getKey(event.getProjectile().getType());
+        if (projectileId == null
+                || !"supplementaries".equals(projectileId.getNamespace())
+                || !"cannonball".equals(projectileId.getPath())) {
+            return;
+        }
+
+        if (event.getRayTraceResult() instanceof BlockHitResult hit
+                && !isExplosionBlockDamageAllowed(level, hit.getBlockPos())) {
+            event.setImpactResult(ProjectileImpactEvent.ImpactResult.STOP_AT_CURRENT_NO_DAMAGE);
+            event.getProjectile().discard();
+        }
+    }
+
     public static boolean isExplosionBlockDamageAllowed(Level level, BlockPos pos) {
         if (level == null || pos == null || level.isClientSide()) return true;
 
@@ -764,6 +785,17 @@ public class ProtectionEvents {
                 return;
             }
 
+            if (isCarryOnAttempt(player)) {
+                if (canUseCarryOnAt(player, event.getPos())) return;
+                event.setCanceled(true);
+                sendCarryOnDenied(player);
+                if (event.getLevel() instanceof Level level) {
+                    BlockState state = level.getBlockState(event.getPos());
+                    level.sendBlockUpdated(event.getPos(), state, state, 3);
+                }
+                return;
+            }
+
             if (!canInteract(player, event.getPos(), ClaimAction.BLOCK_BREAK, event.getLevel().getBlockState(event.getPos()))) {
                 event.setCanceled(true);
                 sendMsg(player);
@@ -780,6 +812,17 @@ public class ProtectionEvents {
     @SubscribeEvent(priority = EventPriority.HIGHEST)
     public static void onBlockPlace(BlockEvent.EntityPlaceEvent event) {
         if (event.getEntity() instanceof ServerPlayer player) {
+            if (isCarryOnAttempt(player)) {
+                if (canUseCarryOnAt(player, event.getPos())) return;
+                event.setCanceled(true);
+                sendCarryOnDenied(player);
+                if (event.getLevel() instanceof Level level) {
+                    BlockState state = level.getBlockState(event.getPos());
+                    level.sendBlockUpdated(event.getPos(), state, state, 3);
+                }
+                return;
+            }
+
             if (!canInteract(player, event.getPos(), ClaimAction.BLOCK_PLACE, event.getPlacedBlock())) {
                 event.setCanceled(true);
                 sendMsg(player);
@@ -798,9 +841,7 @@ public class ProtectionEvents {
         if (event.getEntity() instanceof ServerPlayer player) {
             BlockPos pos = event.getPos();
             BlockState state = player.level().getBlockState(pos);
-            ChunkPos chunkPos = new ChunkPos(pos);
             String dim = player.level().dimension().location().toString();
-            UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dim);
             ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(pos, dim);
 
             if (ProtectionRoomManager.get().handleRoomSignInteract(player, pos)) {
@@ -842,65 +883,13 @@ public class ProtectionEvents {
                 }
             }
 
-            if (room != null && !ProtectionRoomManager.get().canPlayerAccessRoom(player, room)
-                    && isCarryOnAttempt(player)) {
-                if (isFlyingCarryOnAttempt(player)) {
-                    event.setCanceled(true);
-                    event.setUseBlock(Event.Result.DENY);
-                    event.setUseItem(Event.Result.DENY);
-                    sendMsg(player, "Â§c[!] You cannot use Carry On while flying here!");
-                    return;
-                }
-                if (!ProtectionRoomManager.get().getRoomFlag(room, "carry_on")) {
-                    event.setCanceled(true);
-                    event.setUseBlock(Event.Result.DENY);
-                    event.setUseItem(Event.Result.DENY);
-                    sendMsg(player, "Â§c[!] You do not have permission to use Carry On here!");
-                    return;
-                }
-                String blockFlag = getBlockInteractionFlag(player, pos, state);
-                if (!blockFlag.isEmpty() && !ProtectionRoomManager.get().getRoomFlag(room, blockFlag)) {
-                    event.setCanceled(true);
-                    event.setUseBlock(Event.Result.DENY);
-                    event.setUseItem(Event.Result.DENY);
-                    sendMsg(player);
-                    return;
-                }
+            if (isCarryOnAttempt(player)) {
+                if (canUseCarryOnAt(player, pos)) return;
+                event.setCanceled(true);
+                event.setUseBlock(Event.Result.DENY);
+                event.setUseItem(Event.Result.DENY);
+                sendCarryOnDenied(player);
                 return;
-            }
-
-            if (room == null && owner != null && !owner.equals(player.getUUID())
-                    && !ProtectionPermissions.canBypassClaim(player, owner)) {
-                String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
-                if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) {
-
-                    boolean isCarryOnAttempt = isCarryOnAttempt(player);
-                    if (isCarryOnAttempt) {
-                        if (isFlyingCarryOnAttempt(player)) {
-                            event.setCanceled(true);
-                            event.setUseBlock(Event.Result.DENY);
-                            event.setUseItem(Event.Result.DENY);
-                            sendMsg(player, "§c[!] You cannot use Carry On while flying here!");
-                            return;
-                        }
-                        if (!ClaimManager.get().getFlag(owner, claimId, "carry_on")) {
-                            event.setCanceled(true);
-                            event.setUseBlock(Event.Result.DENY);
-                            event.setUseItem(Event.Result.DENY);
-                            sendMsg(player, "§c[!] You do not have permission to use Carry On here!");
-                            return;
-                        }
-                        String blockFlag = getBlockInteractionFlag(player, pos, state);
-                        if (!blockFlag.isEmpty() && !ClaimManager.get().getFlag(owner, claimId, blockFlag)) {
-                            event.setCanceled(true);
-                            event.setUseBlock(Event.Result.DENY);
-                            event.setUseItem(Event.Result.DENY);
-                            sendMsg(player);
-                            return;
-                        }
-                        return;
-                    }
-                }
             }
 
             if (!canInteract(player, pos, ClaimAction.BLOCK_INTERACT, state)) {
@@ -909,6 +898,23 @@ public class ProtectionEvents {
                 event.setUseItem(Event.Result.DENY);
                 sendMsg(player);
             }
+        }
+    }
+
+    @SubscribeEvent(priority = EventPriority.LOWEST)
+    public static void onInteractBlockAfterCarryOn(PlayerInteractEvent.RightClickBlock event) {
+        if (event.isCanceled() || !(event.getEntity() instanceof ServerPlayer player)
+                || !isCarryOnAttempt(player)) {
+            return;
+        }
+
+        BlockPos pos = event.getPos();
+        BlockState state = player.level().getBlockState(pos);
+        if (!canInteract(player, pos, ClaimAction.BLOCK_INTERACT, state)) {
+            event.setCanceled(true);
+            event.setUseBlock(Event.Result.DENY);
+            event.setUseItem(Event.Result.DENY);
+            sendMsg(player);
         }
     }
 
@@ -969,8 +975,7 @@ public class ProtectionEvents {
                     && !ProtectionPermissions.canBypassClaim(player, owner)) {
                 String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
                 if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) {
-                    boolean isCarryOnAttempt = isCarryOnAttempt(player);
-                    if (isCarryOnAttempt) {
+                    if (isCarryOnEntityAttempt(player)) {
                         if (isFlyingCarryOnAttempt(player)) {
                             event.setCanceled(true);
                             event.setResult(Event.Result.DENY);
@@ -991,6 +996,20 @@ public class ProtectionEvents {
                     }
                 }
             }
+        }
+    }
+
+    @SubscribeEvent(priority = EventPriority.LOWEST)
+    public static void onInteractEntityAfterCarryOn(PlayerInteractEvent.EntityInteract event) {
+        if (event.isCanceled() || !(event.getEntity() instanceof ServerPlayer player)
+                || !isCarryOnEntityAttempt(player)) {
+            return;
+        }
+
+        if (!canInteractWithEntityNormally(player, event.getTarget().blockPosition())) {
+            event.setCanceled(true);
+            event.setResult(Event.Result.DENY);
+            sendMsg(player);
         }
     }
 
@@ -1025,8 +1044,7 @@ public class ProtectionEvents {
                     && !ProtectionPermissions.canBypassClaim(player, owner)) {
                 String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
                 if (!ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) {
-                    boolean isCarryOnAttempt = isCarryOnAttempt(player);
-                    if (isCarryOnAttempt) {
+                    if (isCarryOnEntityAttempt(player)) {
                         if (isFlyingCarryOnAttempt(player)) {
                             event.setCanceled(true);
                             event.setResult(Event.Result.DENY);
@@ -1144,21 +1162,75 @@ public class ProtectionEvents {
 
     private static boolean canInteractWithRoomEntity(ServerPlayer player, ProtectionRoomManager.ProtectionRoom room) {
         if (ProtectionRoomManager.get().canPlayerAccessRoom(player, room)) return true;
-        if (isCarryOnAttempt(player)) {
+        if (isCarryOnEntityAttempt(player)) {
             return !isFlyingCarryOnAttempt(player)
                     && ProtectionRoomManager.get().getRoomFlag(room, "carry_on");
         }
         return ProtectionRoomManager.get().getRoomFlag(room, "interact_entities");
     }
 
+    private static boolean canInteractWithEntityNormally(ServerPlayer player, BlockPos pos) {
+        String dimension = player.level().dimension().location().toString();
+        ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(pos, dimension);
+        if (room != null) {
+            return ProtectionRoomManager.get().canPlayerAccessRoom(player, room)
+                    || ProtectionRoomManager.get().getRoomFlag(room, "interact_entities");
+        }
+
+        ChunkPos chunkPos = new ChunkPos(pos);
+        UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dimension);
+        if (owner == null
+                || owner.equals(player.getUUID())
+                || ProtectionPermissions.canBypassClaim(player, owner)) {
+            return true;
+        }
+
+        String claimId = ClaimManager.get().getClaimId(chunkPos, dimension);
+        return ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)
+                || ClaimManager.get().getFlag(owner, claimId, "interact_entities");
+    }
+
     private static boolean isCarryOnAttempt(ServerPlayer player) {
-        return player.getMainHandItem().isEmpty()
-                && player.getOffhandItem().isEmpty()
-                && (player.isCrouching() || player.isShiftKeyDown());
+        return CarryOnCompat.getState(player).isBlockInteractionAttempt();
+    }
+
+    private static boolean isCarryOnEntityAttempt(ServerPlayer player) {
+        return CarryOnCompat.getState(player).isEntityInteractionAttempt();
     }
 
     private static boolean isFlyingCarryOnAttempt(ServerPlayer player) {
         return player.getAbilities().flying;
+    }
+
+    private static boolean canUseCarryOnAt(ServerPlayer player, BlockPos pos) {
+        String dimension = player.level().dimension().location().toString();
+        ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(pos, dimension);
+        if (room != null) {
+            if (ProtectionRoomManager.get().canPlayerAccessRoom(player, room)) return true;
+            return !isFlyingCarryOnAttempt(player)
+                    && ProtectionRoomManager.get().getRoomFlag(room, "carry_on");
+        }
+
+        ChunkPos chunkPos = new ChunkPos(pos);
+        UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dimension);
+        if (owner == null
+                || owner.equals(player.getUUID())
+                || ProtectionPermissions.canBypassClaim(player, owner)) {
+            return true;
+        }
+
+        String claimId = ClaimManager.get().getClaimId(chunkPos, dimension);
+        if (ClaimManager.get().isTrusted(owner, player.getUUID(), claimId)) return true;
+        return !isFlyingCarryOnAttempt(player)
+                && ClaimManager.get().getFlag(owner, claimId, "carry_on");
+    }
+
+    private static void sendCarryOnDenied(ServerPlayer player) {
+        if (isFlyingCarryOnAttempt(player)) {
+            sendMsg(player, "\u00A7c[!] You cannot use Carry On while flying here!");
+        } else {
+            sendMsg(player, "\u00A7c[!] You do not have permission to use Carry On here!");
+        }
     }
 
     private static boolean canUseBlock(ServerPlayer player, BlockPos pos, BlockState state, UUID owner, String claimId, boolean publicBuild) {
