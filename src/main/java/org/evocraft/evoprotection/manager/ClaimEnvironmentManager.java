@@ -61,7 +61,7 @@ public class ClaimEnvironmentManager {
             ChannelPipeline pipeline = channel.pipeline();
             if (pipeline.get(PIPELINE_HANDLER_NAME) != null) return;
 
-            ClaimTimePacketInterceptor interceptor = new ClaimTimePacketInterceptor(playerId);
+            ClaimEnvironmentPacketInterceptor interceptor = new ClaimEnvironmentPacketInterceptor(playerId);
             if (pipeline.get("encoder") != null) {
                 pipeline.addAfter("encoder", PIPELINE_HANDLER_NAME, interceptor);
             } else {
@@ -159,6 +159,32 @@ public class ClaimEnvironmentManager {
         ClientboundSetTimePacket replacement = createFrozenTimePacket(originalPacket.getGameTime(), override.fixedTime);
         debugIntercept(playerId, originalPacket, replacement, override);
         return replacement;
+    }
+
+    public Packet<?> replaceOutgoingWeatherPacket(UUID playerId, ClientboundGameEventPacket originalPacket) {
+        EnvironmentState state = playerStates.get(playerId);
+        if (state == null || state.weatherMode == PacketHandler.S2C_EnvironmentOverride.MODE_NORMAL) {
+            return originalPacket;
+        }
+
+        ClientboundGameEventPacket.Type event = originalPacket.getEvent();
+        boolean weatherEvent = event == ClientboundGameEventPacket.START_RAINING
+                || event == ClientboundGameEventPacket.STOP_RAINING
+                || event == ClientboundGameEventPacket.RAIN_LEVEL_CHANGE
+                || event == ClientboundGameEventPacket.THUNDER_LEVEL_CHANGE;
+        if (!weatherEvent) return originalPacket;
+
+        boolean forceRain = state.weatherMode == PacketHandler.S2C_EnvironmentOverride.WEATHER_RAIN;
+        if (event == ClientboundGameEventPacket.START_RAINING
+                || event == ClientboundGameEventPacket.STOP_RAINING) {
+            return new ClientboundGameEventPacket(
+                    forceRain ? ClientboundGameEventPacket.START_RAINING : ClientboundGameEventPacket.STOP_RAINING,
+                    0.0F);
+        }
+        if (event == ClientboundGameEventPacket.RAIN_LEVEL_CHANGE) {
+            return new ClientboundGameEventPacket(ClientboundGameEventPacket.RAIN_LEVEL_CHANGE, forceRain ? 1.0F : 0.0F);
+        }
+        return new ClientboundGameEventPacket(ClientboundGameEventPacket.THUNDER_LEVEL_CHANGE, 0.0F);
     }
 
     private void refreshPlayer(ServerPlayer player, boolean force) {
@@ -335,10 +361,10 @@ public class ClaimEnvironmentManager {
                 + " fixedTime=" + fixedTime);
     }
 
-    private static class ClaimTimePacketInterceptor extends ChannelDuplexHandler {
+    private static class ClaimEnvironmentPacketInterceptor extends ChannelDuplexHandler {
         private final UUID playerId;
 
-        private ClaimTimePacketInterceptor(UUID playerId) {
+        private ClaimEnvironmentPacketInterceptor(UUID playerId) {
             this.playerId = playerId;
         }
 
@@ -346,6 +372,13 @@ public class ClaimEnvironmentManager {
         public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
             if (msg instanceof ClientboundSetTimePacket packet) {
                 Packet<?> replacement = ClaimEnvironmentManager.get().replaceOutgoingTimePacket(playerId, packet);
+                if (replacement != packet) {
+                    ctx.write(replacement, promise);
+                    return;
+                }
+            }
+            if (msg instanceof ClientboundGameEventPacket packet) {
+                Packet<?> replacement = ClaimEnvironmentManager.get().replaceOutgoingWeatherPacket(playerId, packet);
                 if (replacement != packet) {
                     ctx.write(replacement, promise);
                     return;

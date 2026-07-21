@@ -5,12 +5,16 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.entity.MobSpawnType;
+import net.minecraft.world.entity.ai.goal.MoveToBlockGoal;
 import net.minecraft.world.entity.monster.Monster;
+import net.minecraft.world.entity.monster.Zombie;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.LevelReader;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.piston.PistonStructureResolver;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
@@ -511,6 +515,10 @@ public class ProtectionEvents {
     public static void onEntityJoin(EntityJoinLevelEvent event) {
         if (event.getLevel().isClientSide()) return;
 
+        if (event.getEntity() instanceof Zombie zombie) {
+            ensureProtectedTurtleEggGoal(zombie);
+        }
+
         if (event.getEntity() instanceof net.minecraft.world.entity.LightningBolt ||
                 event.getEntity() instanceof net.minecraft.world.entity.item.PrimedTnt) {
             BlockPos blockPos = event.getEntity().blockPosition();
@@ -617,6 +625,42 @@ public class ProtectionEvents {
         }
     }
 
+    private static void ensureProtectedTurtleEggGoal(Zombie zombie) {
+        boolean alreadyRegistered = zombie.goalSelector.getAvailableGoals().stream()
+                .anyMatch(wrappedGoal -> wrappedGoal.getGoal() instanceof ProtectedTurtleEggAttractionGoal);
+        if (!alreadyRegistered) {
+            zombie.goalSelector.addGoal(4, new ProtectedTurtleEggAttractionGoal(zombie));
+        }
+    }
+
+    private static boolean isProtectedPosition(Level level, BlockPos pos) {
+        String dimension = level.dimension().location().toString();
+        if (ProtectionRoomManager.get().getRoomAt(pos, dimension) != null) {
+            return true;
+        }
+        return ClaimManager.get().getChunkOwner(new ChunkPos(pos), dimension) != null;
+    }
+
+    private static final class ProtectedTurtleEggAttractionGoal extends MoveToBlockGoal {
+        private final Zombie zombie;
+
+        private ProtectedTurtleEggAttractionGoal(Zombie zombie) {
+            super(zombie, 1.0D, 24, 3);
+            this.zombie = zombie;
+        }
+
+        @Override
+        protected boolean isValidTarget(LevelReader level, BlockPos pos) {
+            return level.getBlockState(pos).is(Blocks.TURTLE_EGG)
+                    && isProtectedPosition(zombie.level(), pos);
+        }
+
+        @Override
+        public double acceptedDistance() {
+            return 1.14D;
+        }
+    }
+
     @SubscribeEvent(priority = EventPriority.HIGHEST)
     public static void onExplosionDetonate(ExplosionEvent.Detonate event) {
         Level level = event.getLevel();
@@ -624,19 +668,7 @@ public class ProtectionEvents {
 
         String dim = level.dimension().location().toString();
 
-        event.getAffectedBlocks().removeIf(pos -> {
-            ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(pos, dim);
-            if (room != null && room.ownerUuid != null) {
-                return !ProtectionRoomManager.get().getRoomFlag(room, "explosions");
-            }
-            ChunkPos chunkPos = new ChunkPos(pos);
-            UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dim);
-            if (owner != null) {
-                String claimId = ClaimManager.get().getClaimId(chunkPos, dim);
-                return !ClaimManager.get().getFlag(owner, claimId, "explosions");
-            }
-            return false;
-        });
+        event.getAffectedBlocks().removeIf(pos -> !isExplosionBlockDamageAllowed(level, pos));
 
         event.getAffectedEntities().removeIf(entity -> {
             if (entity instanceof Player || entity instanceof Monster) return false;
@@ -653,6 +685,23 @@ public class ProtectionEvents {
             }
             return false;
         });
+    }
+
+    public static boolean isExplosionBlockDamageAllowed(Level level, BlockPos pos) {
+        if (level == null || pos == null || level.isClientSide()) return true;
+
+        String dimension = level.dimension().location().toString();
+        ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(pos, dimension);
+        if (room != null && room.ownerUuid != null) {
+            return ProtectionRoomManager.get().getRoomFlag(room, "explosions");
+        }
+
+        ChunkPos chunkPos = new ChunkPos(pos);
+        UUID owner = ClaimManager.get().getChunkOwner(chunkPos, dimension);
+        if (owner == null) return true;
+
+        String claimId = ClaimManager.get().getClaimId(chunkPos, dimension);
+        return ClaimManager.get().getFlag(owner, claimId, "explosions");
     }
 
     // ==========================================
