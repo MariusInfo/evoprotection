@@ -1,6 +1,8 @@
 package org.evocraft.evoprotection.compat;
 
 import com.mojang.logging.LogUtils;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraftforge.fml.ModList;
 import org.slf4j.Logger;
@@ -42,6 +44,37 @@ public final class CarryOnCompat {
         }
     }
 
+    public static boolean isCarriedEntityPlacement(Entity entity) {
+        if (entity == null || !ModList.get().isLoaded(MOD_ID)) return false;
+
+        Access resolved = resolveAccess();
+        if (resolved == null) return false;
+
+        try {
+            for (Player player : entity.level().players()) {
+                if (player.distanceToSqr(entity) > 64.0D) continue;
+
+                Object carryData = resolved.getCarryData.invoke(null, player);
+                if (carryData == null ||
+                        !(boolean) resolved.isCarryingType.invoke(carryData, resolved.entityType)) {
+                    continue;
+                }
+
+                Object content = resolved.getContentNbt.invoke(carryData);
+                if (content instanceof CompoundTag tag && tag.hasUUID("UUID") &&
+                        entity.getUUID().equals(tag.getUUID("UUID"))) {
+                    return true;
+                }
+            }
+        } catch (ReflectiveOperationException | RuntimeException exception) {
+            if (!invocationWarningLogged) {
+                invocationWarningLogged = true;
+                LOGGER.warn("Failed to identify a Carry On entity placement", exception);
+            }
+        }
+        return false;
+    }
+
     private static State legacyState(Player player) {
         boolean keyPressed = player.getMainHandItem().isEmpty()
                 && player.getOffhandItem().isEmpty()
@@ -66,10 +99,11 @@ public final class CarryOnCompat {
                 Method isKeyPressed = dataClass.getMethod("isKeyPressed");
                 Method isCarrying = dataClass.getMethod("isCarrying");
                 Method isCarryingType = dataClass.getMethod("isCarrying", carryTypeClass);
+                Method getContentNbt = dataClass.getMethod("getContentNbt");
                 Object entityType = enumConstant(carryTypeClass, "ENTITY");
                 Object playerType = enumConstant(carryTypeClass, "PLAYER");
                 access = new Access(getCarryData, isKeyPressed, isCarrying,
-                        isCarryingType, entityType, playerType);
+                        isCarryingType, getContentNbt, entityType, playerType);
             } catch (ReflectiveOperationException | LinkageError | RuntimeException exception) {
                 LOGGER.warn("Carry On is installed but its 1.20 compatibility API could not be resolved", exception);
             } finally {
@@ -85,7 +119,8 @@ public final class CarryOnCompat {
     }
 
     private record Access(Method getCarryData, Method isKeyPressed, Method isCarrying,
-                          Method isCarryingType, Object entityType, Object playerType) {
+                          Method isCarryingType, Method getContentNbt,
+                          Object entityType, Object playerType) {
     }
 
     public record State(boolean keyPressed, boolean carrying, boolean carryingEntity) {

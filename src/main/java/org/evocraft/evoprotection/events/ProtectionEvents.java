@@ -553,6 +553,11 @@ public class ProtectionEvents {
             return;
         }
 
+        // Carry On restores the exact saved entity directly, without a Forge spawn event.
+        if (CarryOnCompat.isCarriedEntityPlacement(mob)) {
+            return;
+        }
+
         // Some mods insert entities directly and never fire Forge's normal spawn flow.
         if (!isMobSpawnAllowed(mob, MobSpawnType.NATURAL, false)) {
             event.setCanceled(true);
