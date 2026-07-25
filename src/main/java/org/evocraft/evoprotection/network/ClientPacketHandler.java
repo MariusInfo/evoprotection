@@ -56,6 +56,10 @@ public class ClientPacketHandler {
             if (isAdminMap) {
                 if (mc.screen instanceof AdminClaimMapScreen screen) {
                     screen.updateData(jsonMapData);
+                } else if (mc.screen instanceof FlagScreen fScreen) {
+                    fScreen.updateData(jsonMapData);
+                } else if (mc.screen instanceof TrustScreen tScreen) {
+                    tScreen.updateData(jsonMapData);
                 } else {
                     AdminClaimMapScreen newScreen = new AdminClaimMapScreen();
                     mc.setScreen(newScreen);

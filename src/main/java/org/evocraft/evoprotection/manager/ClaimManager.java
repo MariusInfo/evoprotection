@@ -286,6 +286,9 @@ public class ClaimManager {
                     "explosions",
                     "pvp",
                     "doors",
+                    "use",
+                    "chests",
+                    "public_build",
                     "interact_entities",
                     "carry_on"
             ).contains(normalizedFlag);
@@ -1302,20 +1305,47 @@ public class ClaimManager {
 
     public boolean addTrust(ServerPlayer owner, UUID target, String claimId, String role) {
         if (claimId == null || claimId.isEmpty() || !ownsClaim(owner.getUUID(), claimId)) return false;
-        UUID ownerId = owner.getUUID();
+        return addTrustForOwner(owner, owner.getUUID(), target, claimId, role, false);
+    }
+
+    public boolean addAdminTrust(ServerPlayer admin, UUID target, String claimId, String role) {
+        if (!ProtectionPermissions.hasAdminAccess(admin)
+                || !isAdminClaimOwner(getClaimOwner(claimId))) {
+            return false;
+        }
+        return addTrustForOwner(admin, ADMIN_UUID, target, claimId, role, true);
+    }
+
+    private boolean addTrustForOwner(ServerPlayer actor, UUID ownerId, UUID target, String claimId,
+                                     String role, boolean adminMap) {
+        if (target == null || !ownsClaim(ownerId, claimId)) return false;
         String groupKey = getClaimDisplayName(claimId);
         Map<String, Map<UUID, String>> ownerTrusts = trustedPlayers.computeIfAbsent(ownerId, k -> new HashMap<>());
         Map<UUID, String> trusts = collectAndRemoveGroupTrusts(ownerId, groupKey, ownerTrusts);
         trusts.put(target, normalizeTrustRole(role));
         ownerTrusts.put(groupKey, trusts);
         savePlayerSettings(ownerId);
-        syncToClient(owner);
+        if (adminMap) syncToAdminClient(actor);
+        else syncToClient(actor);
         return true;
     }
 
     public boolean removeTrust(ServerPlayer owner, UUID target, String claimId) {
         if (claimId == null || claimId.isEmpty() || !ownsClaim(owner.getUUID(), claimId)) return false;
-        UUID ownerId = owner.getUUID();
+        return removeTrustForOwner(owner, owner.getUUID(), target, claimId, false);
+    }
+
+    public boolean removeAdminTrust(ServerPlayer admin, UUID target, String claimId) {
+        if (!ProtectionPermissions.hasAdminAccess(admin)
+                || !isAdminClaimOwner(getClaimOwner(claimId))) {
+            return false;
+        }
+        return removeTrustForOwner(admin, ADMIN_UUID, target, claimId, true);
+    }
+
+    private boolean removeTrustForOwner(ServerPlayer actor, UUID ownerId, UUID target, String claimId,
+                                        boolean adminMap) {
+        if (target == null || !ownsClaim(ownerId, claimId)) return false;
         Map<String, Map<UUID, String>> ownerTrusts = trustedPlayers.get(ownerId);
         if (ownerTrusts == null) return false;
 
@@ -1326,8 +1356,38 @@ public class ClaimManager {
         else ownerTrusts.put(groupKey, trusts);
 
         savePlayerSettings(ownerId);
-        syncToClient(owner);
+        if (adminMap) syncToAdminClient(actor);
+        else syncToClient(actor);
         return removed;
+    }
+
+    public boolean leaveTrust(ServerPlayer visitor, String claimId) {
+        if (visitor == null || claimId == null || claimId.isEmpty()) return false;
+        UUID ownerId = getClaimOwner(claimId);
+        UUID visitorId = visitor.getUUID();
+        if (ownerId == null || ownerId.equals(visitorId)) return false;
+
+        Map<String, Map<UUID, String>> ownerTrusts = trustedPlayers.get(ownerId);
+        if (ownerTrusts == null) return false;
+
+        String groupKey = getClaimDisplayName(claimId);
+        Map<UUID, String> trusts = collectAndRemoveGroupTrusts(ownerId, groupKey, ownerTrusts);
+        boolean removed = trusts.remove(visitorId) != null;
+        if (!removed) {
+            if (!trusts.isEmpty()) ownerTrusts.put(groupKey, trusts);
+            return false;
+        }
+
+        if (trusts.isEmpty()) ownerTrusts.remove(groupKey);
+        else ownerTrusts.put(groupKey, trusts);
+        savePlayerSettings(ownerId);
+        syncToClient(visitor);
+
+        ServerPlayer owner = visitor.getServer() == null
+                ? null
+                : visitor.getServer().getPlayerList().getPlayer(ownerId);
+        if (owner != null) syncToClient(owner);
+        return true;
     }
 
     private Map<UUID, String> collectAndRemoveGroupTrusts(UUID owner, String groupKey,
@@ -1438,6 +1498,10 @@ public class ClaimManager {
             Set<String> trustClaimIds = new HashSet<>();
             Set<String> flagClaimIds = new HashSet<>();
             Map<String, String> claimDisplayNames = new HashMap<>();
+            Map<String, String> claimOwnerNames = new HashMap<>();
+            Map<String, String> viewerRoles = new HashMap<>();
+            Set<String> leaveableClaimIds = new HashSet<>();
+            String playerLang = getPlayerLanguage(player.getUUID());
             UUID visibleOwner = isAdminMap ? ADMIN_UUID : player.getUUID();
             Set<String> processedClaimIds = new HashSet<>();
 
@@ -1452,11 +1516,19 @@ public class ClaimManager {
                         trustClaimIds.add(claimId);
                         flagClaimIds.add(claimId);
                         claimDisplayNames.put(claimId, getClaimDisplayName(claimId));
+                        claimOwnerNames.put(claimId,
+                                isAdminClaimOwner(entry.getValue()) ? ADMIN_CLAIM_NAME : getOwnerName(entry.getValue()));
+                        viewerRoles.put(claimId, ROLE_COOWNER);
                     } else if (!isAdminMap) {
                         String role = getTrustRole(entry.getValue(), player.getUUID(), claimId);
                         if (roleCanEditAnyFlag(role)) {
                             flagClaimIds.add(claimId);
-                            claimDisplayNames.put(claimId, getClaimDisplayName(claimId));
+                            String roleLabel = LanguageManager.get(playerLang, "gui.trust.role." + role);
+                            claimDisplayNames.put(claimId, getClaimDisplayName(claimId) + " (" + roleLabel + ")");
+                            claimOwnerNames.put(claimId,
+                                    isAdminClaimOwner(entry.getValue()) ? ADMIN_CLAIM_NAME : getOwnerName(entry.getValue()));
+                            viewerRoles.put(claimId, role);
+                            leaveableClaimIds.add(claimId);
                         }
                     }
                 }
@@ -1467,11 +1539,26 @@ public class ClaimManager {
                     String roomClientId = ProtectionRoomManager.get().getClientRoomId(room);
                     trustClaimIds.add(roomClientId);
                     claimDisplayNames.put(roomClientId, ProtectionRoomManager.get().getRoomDisplayName(room));
+                    claimOwnerNames.put(roomClientId, ProtectionRoomManager.get().getRoomOwnerName(room));
+                    viewerRoles.put(roomClientId, ROLE_COOWNER);
                 }
                 for (ProtectionRoomManager.ProtectionRoom room : ProtectionRoomManager.get().getFlagEditableRooms(player.getUUID())) {
                     String roomClientId = ProtectionRoomManager.get().getClientRoomId(room);
                     flagClaimIds.add(roomClientId);
-                    claimDisplayNames.put(roomClientId, ProtectionRoomManager.get().getRoomDisplayName(room));
+                    boolean ownedByViewer = player.getUUID().equals(room.ownerUuid);
+                    String role = ownedByViewer
+                            ? ROLE_COOWNER
+                            : ProtectionRoomManager.get().getRoomTrustRole(room, player.getUUID());
+                    if (ownedByViewer) {
+                        claimDisplayNames.put(roomClientId, ProtectionRoomManager.get().getRoomDisplayName(room));
+                    } else {
+                        String roleLabel = LanguageManager.get(playerLang, "gui.trust.role." + role);
+                        claimDisplayNames.put(roomClientId,
+                                ProtectionRoomManager.get().getRoomBaseDisplayName(room) + " (" + roleLabel + ")");
+                        leaveableClaimIds.add(roomClientId);
+                    }
+                    claimOwnerNames.put(roomClientId, ProtectionRoomManager.get().getRoomOwnerName(room));
+                    viewerRoles.put(roomClientId, role);
                 }
             }
 
@@ -1486,7 +1573,7 @@ public class ClaimManager {
                 Map<UUID, String> mappedNames = new HashMap<>();
                 Map<UUID, String> roles = ProtectionRoomManager.get().isClientRoomId(claimId)
                         ? new HashMap<>(ProtectionRoomManager.get().getRoomTrustRolesByClientId(claimId))
-                        : new HashMap<>(getTrustRoles(player.getUUID(), claimId));
+                        : new HashMap<>(getTrustRoles(getClaimOwner(claimId), claimId));
                 if (roles.isEmpty()) continue;
                 for (UUID id : roles.keySet()) {
                     if (id != null && player.getServer() != null) {
@@ -1509,12 +1596,13 @@ public class ClaimManager {
                 if (flagOwner != null) {
                     Map<String, Boolean> flags = new HashMap<>(getFlagsForClaim(flagOwner, claimId));
                     if (!flags.isEmpty()) myFlagsMap.put(claimId, flags);
-                    claimDisplayNames.put(claimId, getClaimDisplayName(claimId));
+                    claimDisplayNames.putIfAbsent(claimId, getClaimDisplayName(claimId));
                 }
             }
 
             SyncData data = new SyncData(localClaims, trustedNamesPerClaim, trustedRolesPerClaim, myFlagsMap,
                     allMyClaimIds, trustClaimIds, flagClaimIds, claimDisplayNames,
+                    claimOwnerNames, viewerRoles, leaveableClaimIds,
                     getMaxSlots(player.getUUID()), getUsedClaimCount(player.getUUID()), getNextSlotCost(player.getUUID()));
             PacketHandler.sendToPlayer(new PacketHandler.S2C_SyncClaimData(GSON.toJson(data), isAdminMap), player);
         } catch (Exception e) {
@@ -1532,13 +1620,18 @@ public class ClaimManager {
         public Set<String> trustClaimNames;
         public Set<String> flagClaimNames;
         public Map<String, String> claimDisplayNames;
+        public Map<String, String> claimOwnerNames;
+        public Map<String, String> viewerRoles;
+        public Set<String> leaveableClaimNames;
         public int maxSlots, usedSlots;
         public double nextSlotCost;
 
         public SyncData(Map<String, ClientClaimInfo> m, Map<String, Map<UUID, String>> t,
                         Map<String, Map<UUID, String>> roles, Map<String, Map<String, Boolean>> flags,
                         Set<String> names, Set<String> trustNames, Set<String> flagNames,
-                        Map<String, String> displayNames, int max, int used, double cost) {
+                        Map<String, String> displayNames, Map<String, String> ownerNames,
+                        Map<String, String> rolesForViewer, Set<String> leaveableNames,
+                        int max, int used, double cost) {
             this.map = m;
             this.trustedPerClaim = t;
             this.trustedRolesPerClaim = roles;
@@ -1547,6 +1640,9 @@ public class ClaimManager {
             this.trustClaimNames = trustNames;
             this.flagClaimNames = flagNames;
             this.claimDisplayNames = displayNames;
+            this.claimOwnerNames = ownerNames;
+            this.viewerRoles = rolesForViewer;
+            this.leaveableClaimNames = leaveableNames;
             this.maxSlots = max;
             this.usedSlots = used;
             this.nextSlotCost = cost;

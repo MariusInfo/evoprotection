@@ -606,7 +606,17 @@ public class ProtectionRoomManager {
     public String getRoomDisplayName(ProtectionRoom room) {
         if (room == null) return "Room";
         String ownership = room.offerType == RoomOfferType.RENT ? "Rented" : "Owned";
-        return "Room: " + room.name + " (" + ownership + ")";
+        return getRoomBaseDisplayName(room) + " (" + ownership + ")";
+    }
+
+    public String getRoomBaseDisplayName(ProtectionRoom room) {
+        return room == null ? "Room" : "Room: " + room.name;
+    }
+
+    public String getRoomOwnerName(ProtectionRoom room) {
+        if (room == null || room.ownerUuid == null) return "Unknown";
+        if (room.ownerName != null && !room.ownerName.isBlank()) return room.ownerName;
+        return ClaimManager.get().getOwnerName(room.ownerUuid);
     }
 
     public boolean setRoomFlag(ServerPlayer player, String clientRoomId, String flagName, boolean state) {
@@ -663,6 +673,23 @@ public class ProtectionRoomManager {
         ClaimManager.get().syncToClient(owner);
         ServerPlayer target = owner.getServer() == null ? null : owner.getServer().getPlayerList().getPlayer(targetUuid);
         if (target != null) ClaimManager.get().syncToClient(target);
+        return true;
+    }
+
+    public boolean leaveRoomTrust(ServerPlayer visitor, String clientRoomId) {
+        if (visitor == null || !isClientRoomId(clientRoomId)) return false;
+        ProtectionRoom room = getRoomByClientId(clientRoomId);
+        if (room == null || room.ownerUuid == null || room.ownerUuid.equals(visitor.getUUID())) return false;
+        if (room.trustedRoles.remove(visitor.getUUID()) == null) return false;
+
+        room.updatedAt = System.currentTimeMillis();
+        saveRoom(room);
+        ClaimManager.get().syncToClient(visitor);
+
+        ServerPlayer owner = visitor.getServer() == null
+                ? null
+                : visitor.getServer().getPlayerList().getPlayer(room.ownerUuid);
+        if (owner != null) ClaimManager.get().syncToClient(owner);
         return true;
     }
 

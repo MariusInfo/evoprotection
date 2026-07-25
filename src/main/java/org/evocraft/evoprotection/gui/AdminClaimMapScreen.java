@@ -99,7 +99,16 @@ public class AdminClaimMapScreen extends Screen {
         buttons.add(new CustomButton(LanguageManager.get("gui.button.settings"), finalX + 30, finalY + targetH - 35, 120, 20, () -> {
             if (cachedData != null) {
                 Set<String> flagClaims = cachedData.flagClaimNames != null ? cachedData.flagClaimNames : cachedData.allClaimNames;
-                this.minecraft.setScreen(new FlagScreen(this, cachedData.myFlags, flagClaims, cachedData.claimDisplayNames));
+                this.minecraft.setScreen(new FlagScreen(this, cachedData.myFlags, flagClaims,
+                        cachedData.claimDisplayNames, cachedData.claimOwnerNames,
+                        cachedData.viewerRoles, cachedData.leaveableClaimNames));
+            }
+        }));
+        buttons.add(new CustomButton(LanguageManager.get("gui.button.friends"), finalX + 155, finalY + targetH - 35, 120, 20, () -> {
+            if (cachedData != null) {
+                Set<String> trustClaims = cachedData.trustClaimNames != null ? cachedData.trustClaimNames : cachedData.allClaimNames;
+                this.minecraft.setScreen(new TrustScreen(this, cachedData.trustedPerClaim,
+                        cachedData.trustedRolesPerClaim, trustClaims, cachedData.claimDisplayNames));
             }
         }));
 

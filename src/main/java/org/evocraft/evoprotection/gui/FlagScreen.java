@@ -3,6 +3,7 @@ package org.evocraft.evoprotection.gui;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import org.evocraft.evoprotection.manager.ClaimManager;
 import org.evocraft.evoprotection.manager.LanguageManager;
 import org.evocraft.evoprotection.network.PacketHandler;
 
@@ -13,18 +14,27 @@ public class FlagScreen extends Screen {
     private final Map<String, Map<String, Boolean>> myFlags;
     private final List<String> myClaimIds;
     private final Map<String, String> claimDisplayNames;
+    private final Map<String, String> claimOwnerNames;
+    private final Map<String, String> viewerRoles;
+    private final Set<String> leaveableClaimIds;
 
     private int currentClaimIndex = 0;
     private final int imageWidth = 380;
     private final int imageHeight = 335;
     private final List<CustomButton> buttons = new ArrayList<>();
 
-    public FlagScreen(Screen parent, Map<String, Map<String, Boolean>> flags, Set<String> allClaimNames, Map<String, String> claimDisplayNames) {
+    public FlagScreen(Screen parent, Map<String, Map<String, Boolean>> flags,
+                      Set<String> allClaimNames, Map<String, String> claimDisplayNames,
+                      Map<String, String> claimOwnerNames, Map<String, String> viewerRoles,
+                      Set<String> leaveableClaimIds) {
         super(Component.literal("Flags Manager"));
         this.parent = parent;
         this.myFlags = flags;
         this.myClaimIds = new ArrayList<>(allClaimNames);
         this.claimDisplayNames = new HashMap<>(claimDisplayNames != null ? claimDisplayNames : new HashMap<>());
+        this.claimOwnerNames = new HashMap<>(claimOwnerNames != null ? claimOwnerNames : new HashMap<>());
+        this.viewerRoles = new HashMap<>(viewerRoles != null ? viewerRoles : new HashMap<>());
+        this.leaveableClaimIds = new HashSet<>(leaveableClaimIds != null ? leaveableClaimIds : Set.of());
         sortClaims();
     }
 
@@ -37,6 +47,12 @@ public class FlagScreen extends Screen {
         if (flagClaims != null) this.myClaimIds.addAll(flagClaims);
         this.claimDisplayNames.clear();
         if (data.claimDisplayNames != null) this.claimDisplayNames.putAll(data.claimDisplayNames);
+        this.claimOwnerNames.clear();
+        if (data.claimOwnerNames != null) this.claimOwnerNames.putAll(data.claimOwnerNames);
+        this.viewerRoles.clear();
+        if (data.viewerRoles != null) this.viewerRoles.putAll(data.viewerRoles);
+        this.leaveableClaimIds.clear();
+        if (data.leaveableClaimNames != null) this.leaveableClaimIds.addAll(data.leaveableClaimNames);
         sortClaims();
 
         if (this.parent instanceof ClaimMapScreen cms) {
@@ -94,6 +110,14 @@ public class FlagScreen extends Screen {
 
         if (myClaimIds.isEmpty()) return;
 
+        String currentClaimId = myClaimIds.get(currentClaimIndex);
+        if (leaveableClaimIds.contains(currentClaimId)) {
+            buttons.add(new CustomButton(LanguageManager.get("gui.flags.leave"),
+                    x + imageWidth - 90, y + imageHeight - 30, 80, 20,
+                    () -> PacketHandler.INSTANCE.sendToServer(
+                            new PacketHandler.C2S_LeaveProtection(currentClaimId)), true, true));
+        }
+
         buttons.add(new CustomButton("<", x + 20, y + 35, 20, 20, () -> {
             if (currentClaimIndex > 0) { currentClaimIndex--; this.init(); }
         }));
@@ -104,26 +128,38 @@ public class FlagScreen extends Screen {
         int startY = y + 70;
 
         // Left Column
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.pvp") + getStatus("pvp"), x + 15, startY, 170, 20, () -> toggleFlag("pvp")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.doors") + getStatus("doors"), x + 15, startY + 25, 170, 20, () -> toggleFlag("doors")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.use") + getStatus("use"), x + 15, startY + 50, 170, 20, () -> toggleFlag("use")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.interact") + getStatus("interact_entities"), x + 15, startY + 75, 170, 20, () -> toggleFlag("interact_entities")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.pickup") + getStatus("item_pickup"), x + 15, startY + 100, 170, 20, () -> toggleFlag("item_pickup")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.natural_animals") + getStatus("natural_animals"), x + 15, startY + 125, 170, 20, () -> toggleFlag("natural_animals")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.spawner_animals") + getStatus("spawner_animals"), x + 15, startY + 150, 170, 20, () -> toggleFlag("spawner_animals")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.always_middle_day") + getStatus("always_middle_day"), x + 15, startY + 175, 170, 20, () -> toggleFlag("always_middle_day")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.always_shiny") + getStatus("always_shiny"), x + 15, startY + 200, 170, 20, () -> toggleFlag("always_shiny")));
+        addFlagButton("gui.flags.pvp", "pvp", x + 15, startY);
+        addFlagButton("gui.flags.doors", "doors", x + 15, startY + 25);
+        addFlagButton("gui.flags.use", "use", x + 15, startY + 50);
+        addFlagButton("gui.flags.interact", "interact_entities", x + 15, startY + 75);
+        addFlagButton("gui.flags.pickup", "item_pickup", x + 15, startY + 100);
+        addFlagButton("gui.flags.natural_animals", "natural_animals", x + 15, startY + 125);
+        addFlagButton("gui.flags.spawner_animals", "spawner_animals", x + 15, startY + 150);
+        addFlagButton("gui.flags.always_middle_day", "always_middle_day", x + 15, startY + 175);
+        addFlagButton("gui.flags.always_shiny", "always_shiny", x + 15, startY + 200);
 
         // Right Column
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.explosions") + getStatus("explosions"), x + 195, startY, 170, 20, () -> toggleFlag("explosions")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.chests") + getStatus("chests"), x + 195, startY + 25, 170, 20, () -> toggleFlag("chests")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.public_build") + getStatus("public_build"), x + 195, startY + 50, 170, 20, () -> toggleFlag("public_build")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.carry_on") + getStatus("carry_on"), x + 195, startY + 75, 170, 20, () -> toggleFlag("carry_on")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.hurt_animals") + getStatus("hurt_animals"), x + 195, startY + 100, 170, 20, () -> toggleFlag("hurt_animals")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.natural_monsters") + getStatus("natural_monsters"), x + 195, startY + 125, 170, 20, () -> toggleFlag("natural_monsters")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.spawner_monsters") + getStatus("spawner_monsters"), x + 195, startY + 150, 170, 20, () -> toggleFlag("spawner_monsters")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.always_middle_night") + getStatus("always_middle_night"), x + 195, startY + 175, 170, 20, () -> toggleFlag("always_middle_night")));
-        buttons.add(new CustomButton(LanguageManager.get("gui.flags.always_rain") + getStatus("always_rain"), x + 195, startY + 200, 170, 20, () -> toggleFlag("always_rain")));
+        addFlagButton("gui.flags.explosions", "explosions", x + 195, startY);
+        addFlagButton("gui.flags.chests", "chests", x + 195, startY + 25);
+        addFlagButton("gui.flags.public_build", "public_build", x + 195, startY + 50);
+        addFlagButton("gui.flags.carry_on", "carry_on", x + 195, startY + 75);
+        addFlagButton("gui.flags.hurt_animals", "hurt_animals", x + 195, startY + 100);
+        addFlagButton("gui.flags.natural_monsters", "natural_monsters", x + 195, startY + 125);
+        addFlagButton("gui.flags.spawner_monsters", "spawner_monsters", x + 195, startY + 150);
+        addFlagButton("gui.flags.always_middle_night", "always_middle_night", x + 195, startY + 175);
+        addFlagButton("gui.flags.always_rain", "always_rain", x + 195, startY + 200);
+    }
+
+    private void addFlagButton(String labelKey, String flag, int x, int y) {
+        buttons.add(new CustomButton(LanguageManager.get(labelKey) + getStatus(flag),
+                x, y, 170, 20, () -> toggleFlag(flag), canEditCurrentFlag(flag), false));
+    }
+
+    private boolean canEditCurrentFlag(String flag) {
+        if (myClaimIds.isEmpty()) return false;
+        if (this.parent instanceof AdminClaimMapScreen) return true;
+        String claimId = myClaimIds.get(currentClaimIndex);
+        return ClaimManager.roleCanEditFlag(viewerRoles.get(claimId), flag);
     }
 
     private String getStatus(String flag) {
@@ -134,7 +170,7 @@ public class FlagScreen extends Screen {
     }
 
     private void toggleFlag(String flag) {
-        if (myClaimIds.isEmpty()) return;
+        if (myClaimIds.isEmpty() || !canEditCurrentFlag(flag)) return;
         String currentClaimId = myClaimIds.get(currentClaimIndex);
         boolean currentState = myFlags.getOrDefault(currentClaimId, new HashMap<>()).getOrDefault(flag, false);
         boolean isAdminMode = (this.parent instanceof AdminClaimMapScreen);
@@ -167,6 +203,8 @@ public class FlagScreen extends Screen {
         } else {
             String currentClaimId = myClaimIds.get(currentClaimIndex);
             g.drawCenteredString(this.font, LanguageManager.get("gui.flags.desc1") + getDisplayName(currentClaimId), sw/2, y + 40, 0xFFFFFF);
+            String ownerName = claimOwnerNames.getOrDefault(currentClaimId, "Unknown");
+            g.drawCenteredString(this.font, LanguageManager.get("gui.flags.owner", ownerName), sw / 2, y + 54, 0xFFAAAAAA);
         }
 
         for (CustomButton b : buttons) {
@@ -194,32 +232,56 @@ public class FlagScreen extends Screen {
         String text;
         int x, y, w, h;
         Runnable action;
+        boolean enabled;
+        boolean danger;
 
         public CustomButton(String text, int x, int y, int w, int h, Runnable action) {
+            this(text, x, y, w, h, action, true, false);
+        }
+
+        public CustomButton(String text, int x, int y, int w, int h, Runnable action,
+                            boolean enabled, boolean danger) {
             this.text = text;
             this.x = x;
             this.y = y;
             this.w = w;
             this.h = h;
             this.action = action;
+            this.enabled = enabled;
+            this.danger = danger;
         }
 
         public void render(GuiGraphics g, int mx, int my, net.minecraft.client.gui.Font font) {
-            boolean hover = mx >= x && mx <= x + w && my >= y && my <= y + h;
-            fillRounded(g, x, y, w, h, 0xAA141C14);
-            outlineRounded(g, x, y, w, h, hover ? 0xFF45996C : 0xFF2D5947);
-            int textWidth = Math.max(1, font.width(text));
+            boolean hover = enabled && mx >= x && mx <= x + w && my >= y && my <= y + h;
+            int background = danger ? 0xAA241010 : 0xAA141C14;
+            int border = danger
+                    ? (hover ? 0xFFFF5555 : 0xFFAA3333)
+                    : (hover ? 0xFF45996C : 0xFF2D5947);
+            if (!enabled) {
+                background = 0xCC111411;
+                border = 0xFF343A34;
+            }
+            fillRounded(g, x, y, w, h, background);
+            outlineRounded(g, x, y, w, h, border);
+            if (!enabled) g.fill(x + 1, y + 1, x + w - 1, y + h - 1, 0x66000000);
+
+            String renderedText = enabled ? text : net.minecraft.ChatFormatting.stripFormatting(text);
+            if (renderedText == null) renderedText = "";
+            int textWidth = Math.max(1, font.width(renderedText));
             float textScale = Math.min(1.0f, (w - 8.0f) / textWidth);
             g.pose().pushPose();
             g.pose().translate(x + w / 2f, y + (h - 8 * textScale) / 2f, 0);
             g.pose().scale(textScale, textScale, 1.0f);
-            g.drawCenteredString(font, text, 0, 0, hover ? 0xFFFFFF : 0xFFDDDDDD);
+            int textColor = !enabled ? 0xFF777777
+                    : danger ? (hover ? 0xFFFFAAAA : 0xFFFF7777)
+                    : (hover ? 0xFFFFFF : 0xFFDDDDDD);
+            g.drawCenteredString(font, renderedText, 0, 0, textColor);
             g.pose().popPose();
         }
 
         public boolean checkClick(int mx, int my) {
             if (mx >= x && mx <= x + w && my >= y && my <= y + h) {
-                action.run();
+                if (enabled) action.run();
                 return true;
             }
             return false;

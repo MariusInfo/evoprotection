@@ -6,10 +6,13 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.ChannelPromise;
 import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
 import net.minecraft.network.protocol.game.ClientboundGameEventPacket;
 import net.minecraft.network.protocol.game.ClientboundSetTimePacket;
+import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.GameRules;
 import org.evocraft.evoprotection.EvoProtection;
@@ -45,6 +48,22 @@ public class ClaimEnvironmentManager {
                 || FLAG_ALWAYS_MIDDLE_NIGHT.equals(normalized)
                 || FLAG_ALWAYS_SHINY.equals(normalized)
                 || FLAG_ALWAYS_RAIN.equals(normalized);
+    }
+
+    public boolean isAlwaysShinyAt(BlockPos pos, String dimension) {
+        if (pos == null || dimension == null || dimension.isEmpty()) return false;
+
+        ProtectionRoomManager.ProtectionRoom room = ProtectionRoomManager.get().getRoomAt(pos, dimension);
+        if (room != null && room.ownerUuid != null) {
+            return ProtectionRoomManager.get().getRoomFlag(room, FLAG_ALWAYS_SHINY);
+        }
+
+        ChunkPos chunk = new ChunkPos(pos);
+        UUID owner = ClaimManager.get().getChunkOwner(chunk, dimension);
+        if (owner == null) return false;
+
+        String claimId = ClaimManager.get().getClaimId(chunk, dimension);
+        return !claimId.isEmpty() && ClaimManager.get().getFlag(owner, claimId, FLAG_ALWAYS_SHINY);
     }
 
     public void handlePlayerLocation(ServerPlayer player) {
@@ -185,6 +204,13 @@ public class ClaimEnvironmentManager {
             return new ClientboundGameEventPacket(ClientboundGameEventPacket.RAIN_LEVEL_CHANGE, forceRain ? 1.0F : 0.0F);
         }
         return new ClientboundGameEventPacket(ClientboundGameEventPacket.THUNDER_LEVEL_CHANGE, 0.0F);
+    }
+
+    public boolean shouldSuppressLightning(UUID playerId, ClientboundAddEntityPacket packet) {
+        if (packet == null || packet.getType() != EntityType.LIGHTNING_BOLT) return false;
+        EnvironmentState state = playerStates.get(playerId);
+        return state != null
+                && state.weatherMode == PacketHandler.S2C_EnvironmentOverride.WEATHER_CLEAR;
     }
 
     private void refreshPlayer(ServerPlayer player, boolean force) {
@@ -383,6 +409,11 @@ public class ClaimEnvironmentManager {
                     ctx.write(replacement, promise);
                     return;
                 }
+            }
+            if (msg instanceof ClientboundAddEntityPacket packet
+                    && ClaimEnvironmentManager.get().shouldSuppressLightning(playerId, packet)) {
+                promise.setSuccess();
+                return;
             }
             ctx.write(msg, promise);
         }

@@ -50,7 +50,11 @@ public class TrustScreen extends Screen {
         if (data.claimDisplayNames != null) this.claimDisplayNames.putAll(data.claimDisplayNames);
         sortClaims();
 
-        if (this.parent instanceof ClaimMapScreen cms) cms.updateData(json);
+        if (this.parent instanceof ClaimMapScreen cms) {
+            cms.updateData(json);
+        } else if (this.parent instanceof AdminClaimMapScreen acms) {
+            acms.updateData(json);
+        }
         this.init();
     }
 

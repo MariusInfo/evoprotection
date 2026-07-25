@@ -142,7 +142,9 @@ public class ClaimMapScreen extends Screen {
             buttons.add(new CustomButton(LanguageManager.get("gui.button.settings"), finalX + 335, finalY + targetH - 30, 75, 20, () -> {
                 if (cachedData != null) {
                     Set<String> flagClaims = cachedData.flagClaimNames != null ? cachedData.flagClaimNames : cachedData.allClaimNames;
-                    this.minecraft.setScreen(new FlagScreen(this, cachedData.myFlags, flagClaims, cachedData.claimDisplayNames));
+                    this.minecraft.setScreen(new FlagScreen(this, cachedData.myFlags, flagClaims,
+                            cachedData.claimDisplayNames, cachedData.claimOwnerNames,
+                            cachedData.viewerRoles, cachedData.leaveableClaimNames));
                 }
             }));
             buttons.add(new CustomButton(LanguageManager.get("gui.button.delete"), finalX + 415, finalY + targetH - 30, 70, 20, () -> {

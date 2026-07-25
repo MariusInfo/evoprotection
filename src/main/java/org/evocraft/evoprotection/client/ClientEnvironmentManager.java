@@ -2,12 +2,17 @@ package org.evocraft.evoprotection.client;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LightningBolt;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import org.evocraft.evoprotection.EvoProtection;
 import org.evocraft.evoprotection.network.PacketHandler;
+
+import java.util.ArrayList;
+import java.util.List;
 
 @Mod.EventBusSubscriber(modid = EvoProtection.MODID, value = Dist.CLIENT)
 public class ClientEnvironmentManager {
@@ -62,10 +67,24 @@ public class ClientEnvironmentManager {
             level.getLevelData().setRaining(false);
             level.setRainLevel(0.0F);
             level.setThunderLevel(0.0F);
+            level.setSkyFlashTime(0);
+            removeTrackedLightning(level);
         } else if (weatherMode == PacketHandler.S2C_EnvironmentOverride.WEATHER_RAIN) {
             level.getLevelData().setRaining(true);
             level.setRainLevel(1.0F);
             level.setThunderLevel(0.0F);
+        }
+    }
+
+    private static void removeTrackedLightning(ClientLevel level) {
+        List<Integer> lightningIds = new ArrayList<>();
+        for (Entity entity : level.entitiesForRendering()) {
+            if (entity instanceof LightningBolt) {
+                lightningIds.add(entity.getId());
+            }
+        }
+        for (int entityId : lightningIds) {
+            level.removeEntity(entityId, Entity.RemovalReason.DISCARDED);
         }
     }
 }

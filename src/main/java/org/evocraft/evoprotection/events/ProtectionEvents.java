@@ -144,6 +144,9 @@ public class ProtectionEvents {
     private static boolean isMobSpawnAllowed(net.minecraft.world.entity.Mob entity,
                                              MobSpawnType spawnType,
                                              boolean hasSpawner) {
+        if (spawnType == MobSpawnType.EVENT && CarryOnCompat.isCarriedEntityPlacement(entity)) {
+            return true;
+        }
         if (isManualSpawn(spawnType)) return true;
 
         ChunkPos chunkPos = new ChunkPos(entity.blockPosition());
@@ -519,6 +522,15 @@ public class ProtectionEvents {
 
         if (event.getEntity() instanceof Zombie zombie) {
             ensureProtectedTurtleEggGoal(zombie);
+        }
+
+        if (event.getEntity() instanceof net.minecraft.world.entity.LightningBolt) {
+            BlockPos lightningPos = event.getEntity().blockPosition();
+            String dimension = event.getLevel().dimension().location().toString();
+            if (ClaimEnvironmentManager.get().isAlwaysShinyAt(lightningPos, dimension)) {
+                event.setCanceled(true);
+                return;
+            }
         }
 
         if (event.getEntity() instanceof net.minecraft.world.entity.LightningBolt ||

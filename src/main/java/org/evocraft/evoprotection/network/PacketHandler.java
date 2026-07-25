@@ -15,6 +15,7 @@ import org.evocraft.evoprotection.EvoProtection;
 import org.evocraft.evoprotection.manager.ClaimEnvironmentManager;
 import org.evocraft.evoprotection.manager.ClaimManager;
 import org.evocraft.evoprotection.manager.LanguageManager;
+import org.evocraft.evoprotection.manager.ProtectionPermissions;
 import org.evocraft.evoprotection.manager.ProtectionRoomManager;
 
 import java.io.ByteArrayInputStream;
@@ -29,7 +30,7 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
 public class PacketHandler {
-    private static final String PROTOCOL_VERSION = "2";
+    private static final String PROTOCOL_VERSION = "3";
     private static final int MAX_CLAIM_ID_LENGTH = 512;
     private static final int MAX_CLAIM_NAME_LENGTH = 64;
     private static final int MAX_FLAG_NAME_LENGTH = 32;
@@ -85,6 +86,7 @@ public class PacketHandler {
         INSTANCE.registerMessage(nextId(), S2C_EnvironmentOverride.class, S2C_EnvironmentOverride::toBytes, S2C_EnvironmentOverride::new, S2C_EnvironmentOverride::handle);
         INSTANCE.registerMessage(nextId(), S2C_OpenRoomOffer.class, S2C_OpenRoomOffer::toBytes, S2C_OpenRoomOffer::new, S2C_OpenRoomOffer::handle);
         INSTANCE.registerMessage(nextId(), C2S_RoomOfferChoice.class, C2S_RoomOfferChoice::toBytes, C2S_RoomOfferChoice::new, C2S_RoomOfferChoice::handle);
+        INSTANCE.registerMessage(nextId(), C2S_LeaveProtection.class, C2S_LeaveProtection::toBytes, C2S_LeaveProtection::new, C2S_LeaveProtection::handle);
     }
 
     public static <MSG> void sendToPlayer(MSG message, ServerPlayer player) {
@@ -447,6 +449,41 @@ public class PacketHandler {
         }
     }
 
+    public static class C2S_LeaveProtection {
+        private final String claimName;
+
+        public C2S_LeaveProtection(String claimName) {
+            this.claimName = claimName == null ? "" : claimName;
+        }
+
+        public C2S_LeaveProtection(FriendlyByteBuf buf) {
+            this.claimName = buf.readUtf(MAX_CLAIM_ID_LENGTH);
+        }
+
+        public void toBytes(FriendlyByteBuf buf) {
+            buf.writeUtf(claimName, MAX_CLAIM_ID_LENGTH);
+        }
+
+        public boolean handle(Supplier<NetworkEvent.Context> supplier) {
+            return handleC2S(supplier, player -> {
+                if (claimName.isEmpty()) return;
+                boolean roomTarget = ProtectionRoomManager.get().isClientRoomId(claimName);
+                String displayName = roomTarget
+                        ? ProtectionRoomManager.get().getRoomDisplayName(
+                                ProtectionRoomManager.get().getRoomByClientId(claimName))
+                        : ClaimManager.get().getClaimDisplayName(claimName);
+                boolean left = roomTarget
+                        ? ProtectionRoomManager.get().leaveRoomTrust(player, claimName)
+                        : ClaimManager.get().leaveTrust(player, claimName);
+                if (left) {
+                    String lang = ClaimManager.get().getPlayerLanguage(player.getUUID());
+                    player.sendSystemMessage(Component.literal(
+                            LanguageManager.get(lang, "msg.trust.left", displayName)));
+                }
+            });
+        }
+    }
+
     public static class C2S_UpdateFlag {
         private final String claimName;
         private final String flagName;
@@ -492,7 +529,7 @@ public class PacketHandler {
                         return;
                     }
 
-                    boolean adminAction = isAdmin && player.hasPermissions(2);
+                    boolean adminAction = isAdmin && ProtectionPermissions.hasAdminAccess(player);
                     if (isAdmin && !adminAction) return;
 
                     UUID targetUUID = adminAction ? new UUID(0, 0) : ClaimManager.get().getClaimOwner(claimName);
@@ -652,9 +689,13 @@ public class PacketHandler {
 
                         if (targetUuid != null) {
                             boolean roomTarget = ProtectionRoomManager.get().isClientRoomId(claimName);
+                            UUID claimOwner = roomTarget ? null : ClaimManager.get().getClaimOwner(claimName);
+                            boolean adminClaimTarget = ClaimManager.isAdminClaimOwner(claimOwner);
                             boolean updated = roomTarget
                                     ? ProtectionRoomManager.get().addRoomTrust(player, targetUuid, claimName, role)
-                                    : ClaimManager.get().addTrust(player, targetUuid, claimName, role);
+                                    : adminClaimTarget
+                                            ? ClaimManager.get().addAdminTrust(player, targetUuid, claimName, role)
+                                            : ClaimManager.get().addTrust(player, targetUuid, claimName, role);
                             if (updated) {
                                 String displayName = roomTarget
                                         ? ProtectionRoomManager.get().getRoomDisplayName(ProtectionRoomManager.get().getRoomByClientId(claimName))
@@ -668,9 +709,14 @@ public class PacketHandler {
                     } else {
                         try {
                             boolean roomTarget = ProtectionRoomManager.get().isClientRoomId(claimName);
+                            UUID claimOwner = roomTarget ? null : ClaimManager.get().getClaimOwner(claimName);
+                            boolean adminClaimTarget = ClaimManager.isAdminClaimOwner(claimOwner);
+                            UUID targetUuid = UUID.fromString(targetUuidStr);
                             boolean removed = roomTarget
-                                    ? ProtectionRoomManager.get().removeRoomTrust(player, UUID.fromString(targetUuidStr), claimName)
-                                    : ClaimManager.get().removeTrust(player, UUID.fromString(targetUuidStr), claimName);
+                                    ? ProtectionRoomManager.get().removeRoomTrust(player, targetUuid, claimName)
+                                    : adminClaimTarget
+                                            ? ClaimManager.get().removeAdminTrust(player, targetUuid, claimName)
+                                            : ClaimManager.get().removeTrust(player, targetUuid, claimName);
                             if (removed) {
                                 String displayName = roomTarget
                                         ? ProtectionRoomManager.get().getRoomDisplayName(ProtectionRoomManager.get().getRoomByClientId(claimName))

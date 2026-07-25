@@ -158,6 +158,7 @@ public class LanguageManager {
             dict.put("msg.trust.role_set", "\u00A78[\u00A7aEvoProtections\u00A78] \u00A7fPlayer \u00A7e%s \u00A7fnow has role \u00A7e%s \u00A7ffor \u00A7b%s");
             dict.put("msg.trust.offline", "§c[!] Player is offline or does not exist!");
             dict.put("msg.trust.removed", "§8[§aEvoProtections§8] §fA player was removed from protection §b%s");
+            dict.put("msg.trust.left", "\u00A7aYou left protection \u00A7e%s\u00A7a.");
 
             // Iconite
             dict.put("gui.button.friends", "§e[+] Friends");
@@ -208,6 +209,8 @@ public class LanguageManager {
             dict.put("gui.flags.title", "§lPROTECTION SETTINGS (FLAGS)");
             dict.put("gui.flags.desc1", "Modifying Flags for: §b");
             dict.put("gui.flags.desc2", "§7These permissions apply to strangers in your area.");
+            dict.put("gui.flags.owner", "Owner: \u00A7e%s");
+            dict.put("gui.flags.leave", "\u00A7cLeave");
             dict.put("gui.flags.pvp", "PVP: ");
             dict.put("gui.flags.doors", "Doors / Gates: ");
             dict.put("gui.flags.use", "Useful Blocks: ");
@@ -257,6 +260,7 @@ public class LanguageManager {
             dict.put("msg.trust.role_set", "\u00A78[\u00A7aEvoProtection\u00A78] \u00A7fPlayer \u00A7e%s \u00A7fhas role \u00A7e%s \u00A7ffor \u00A7b%s");
             dict.put("msg.trust.offline", "§c[!] The player is not online or does not exist!");
             dict.put("msg.trust.removed", "§8[§aEvoProtection§8] §fA player was removed from protection §b%s");
+            dict.put("msg.trust.left", "\u00A7aYou left protection \u00A7e%s\u00A7a.");
 
             dict.put("gui.button.friends", "§e[+] Friends");
             dict.put("gui.button.settings", "§b[*] Settings");
@@ -306,6 +310,8 @@ public class LanguageManager {
             dict.put("gui.flags.title", "§lPROTECTION SETTINGS (FLAGS)");
             dict.put("gui.flags.desc1", "Modifying Flags for: §b");
             dict.put("gui.flags.desc2", "§7These permissions apply to strangers in your area.");
+            dict.put("gui.flags.owner", "Owner: \u00A7e%s");
+            dict.put("gui.flags.leave", "\u00A7cLeave");
             dict.put("gui.flags.pvp", "PVP: ");
             dict.put("gui.flags.doors", "Doors / Gates: ");
             dict.put("gui.flags.use", "Useful Blocks: ");

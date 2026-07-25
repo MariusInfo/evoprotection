@@ -2,9 +2,11 @@ package org.evocraft.evoprotection.compat;
 
 import com.mojang.logging.LogUtils;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraftforge.fml.ModList;
+import net.minecraftforge.registries.ForgeRegistries;
 import org.slf4j.Logger;
 
 import java.lang.reflect.Method;
@@ -61,9 +63,15 @@ public final class CarryOnCompat {
                 }
 
                 Object content = resolved.getContentNbt.invoke(carryData);
-                if (content instanceof CompoundTag tag && tag.hasUUID("UUID") &&
-                        entity.getUUID().equals(tag.getUUID("UUID"))) {
-                    return true;
+                if (content instanceof CompoundTag tag) {
+                    if (tag.hasUUID("UUID") && entity.getUUID().equals(tag.getUUID("UUID"))) {
+                        return true;
+                    }
+
+                    ResourceLocation entityTypeId = ForgeRegistries.ENTITY_TYPES.getKey(entity.getType());
+                    if (entityTypeId != null && entityTypeId.toString().equals(tag.getString("id"))) {
+                        return true;
+                    }
                 }
             }
         } catch (ReflectiveOperationException | RuntimeException exception) {
