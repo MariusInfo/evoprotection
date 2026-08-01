@@ -9,6 +9,7 @@ import net.minecraft.world.entity.ai.goal.MoveToBlockGoal;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.monster.Zombie;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
@@ -910,6 +911,11 @@ public class ProtectionEvents {
             }
 
             if (!canInteract(player, pos, ClaimAction.BLOCK_INTERACT, state)) {
+                if (canPlaceHeldBlockInAccessibleRoom(event, player, state, dim)) {
+                    event.setUseBlock(Event.Result.DENY);
+                    event.setUseItem(Event.Result.ALLOW);
+                    return;
+                }
                 event.setCanceled(true);
                 event.setUseBlock(Event.Result.DENY);
                 event.setUseItem(Event.Result.DENY);
@@ -1160,6 +1166,18 @@ public class ProtectionEvents {
             case FARMLAND_TRAMPLE -> false;
             case BLOCK_INTERACT -> canUseBlock(player, pos, state, owner, claimId, publicBuild);
         };
+    }
+
+    private static boolean canPlaceHeldBlockInAccessibleRoom(PlayerInteractEvent.RightClickBlock event,
+                                                              ServerPlayer player, BlockState clickedState,
+                                                              String dimension) {
+        if (!(event.getItemStack().getItem() instanceof BlockItem)) return false;
+
+        BlockPos placementPos = clickedState.canBeReplaced()
+                ? event.getPos()
+                : event.getPos().relative(event.getFace());
+        ProtectionRoomManager.ProtectionRoom targetRoom = ProtectionRoomManager.get().getRoomAt(placementPos, dimension);
+        return targetRoom != null && ProtectionRoomManager.get().canPlayerAccessRoom(player, targetRoom);
     }
 
     private static boolean isPvpAllowedAt(ServerPlayer player, BlockPos pos) {

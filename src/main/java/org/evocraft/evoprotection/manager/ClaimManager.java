@@ -364,11 +364,16 @@ public class ClaimManager {
         Map<String, Map<UUID, String>> trusts = trustedPlayers.get(owner);
         if (trusts == null) return Collections.emptyMap();
 
-        Map<UUID, String> exact = trusts.get(claimId);
-        if (exact != null) return exact;
+        String groupKey = getClaimDisplayName(claimId);
+        Map<UUID, String> merged = new HashMap<>();
+        for (String siblingClaimId : getClaimIdsWithDisplayName(owner, groupKey)) {
+            Map<UUID, String> legacyClaimTrusts = trusts.get(siblingClaimId);
+            if (legacyClaimTrusts != null) merged.putAll(legacyClaimTrusts);
+        }
 
-        Map<UUID, String> legacy = trusts.get(getClaimDisplayName(claimId));
-        return legacy != null ? legacy : Collections.emptyMap();
+        Map<UUID, String> groupedTrusts = trusts.get(groupKey);
+        if (groupedTrusts != null) merged.putAll(groupedTrusts);
+        return merged.isEmpty() ? Collections.emptyMap() : merged;
     }
 
     public String getTrustRole(UUID owner, UUID visitor, String claimId) {
@@ -1012,6 +1017,7 @@ public class ClaimManager {
             putClaimInMemory(key, player.getUUID());
             playerNames.put(player.getUUID(), player.getGameProfile().getName());
             chunkCustomNames.put(key, customName);
+            canonicalizeTrustsForClaimGroup(player.getUUID(), getClaimIdFromChunkKey(key));
             saveClaim(key, player.getUUID(), customName);
             savePlayerSettings(player.getUUID());
 
@@ -1213,6 +1219,7 @@ public class ClaimManager {
         putClaimInMemory(key, ADMIN_UUID);
         playerNames.put(ADMIN_UUID, "§6" + ADMIN_CLAIM_NAME);
         chunkCustomNames.put(key, displayTitle);
+        canonicalizeTrustsForClaimGroup(ADMIN_UUID, getClaimIdFromChunkKey(key));
         saveClaim(key, ADMIN_UUID, displayTitle);
         savePlayerSettings(ADMIN_UUID);
     }
@@ -1394,13 +1401,22 @@ public class ClaimManager {
                                                            Map<String, Map<UUID, String>> ownerTrusts) {
         Map<UUID, String> merged = new HashMap<>();
         Map<UUID, String> groupedTrusts = ownerTrusts.remove(groupKey);
-        if (groupedTrusts != null) merged.putAll(groupedTrusts);
 
         for (String groupedClaimId : getClaimIdsWithDisplayName(owner, groupKey)) {
             Map<UUID, String> perClaimTrusts = ownerTrusts.remove(groupedClaimId);
             if (perClaimTrusts != null) merged.putAll(perClaimTrusts);
         }
+        if (groupedTrusts != null) merged.putAll(groupedTrusts);
         return merged;
+    }
+
+    private void canonicalizeTrustsForClaimGroup(UUID owner, String claimId) {
+        Map<String, Map<UUID, String>> ownerTrusts = trustedPlayers.get(owner);
+        if (ownerTrusts == null || ownerTrusts.isEmpty()) return;
+
+        String groupKey = getClaimDisplayName(claimId);
+        Map<UUID, String> merged = collectAndRemoveGroupTrusts(owner, groupKey, ownerTrusts);
+        if (!merged.isEmpty()) ownerTrusts.put(groupKey, merged);
     }
 
     private void migrateTrustsToClaimGroups() {
