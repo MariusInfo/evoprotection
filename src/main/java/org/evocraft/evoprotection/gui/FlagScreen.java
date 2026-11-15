@@ -29,8 +29,13 @@ public class FlagScreen extends Screen {
                       Set<String> leaveableClaimIds) {
         super(Component.literal("Flags Manager"));
         this.parent = parent;
-        this.myFlags = flags;
-        this.myClaimIds = new ArrayList<>(allClaimNames);
+        this.myFlags = new HashMap<>();
+        if (flags != null) {
+            flags.forEach((k, v) -> {
+                if (k != null && v != null) this.myFlags.put(k, new HashMap<>(v));
+            });
+        }
+        this.myClaimIds = new ArrayList<>(allClaimNames != null ? allClaimNames : Set.of());
         this.claimDisplayNames = new HashMap<>(claimDisplayNames != null ? claimDisplayNames : new HashMap<>());
         this.claimOwnerNames = new HashMap<>(claimOwnerNames != null ? claimOwnerNames : new HashMap<>());
         this.viewerRoles = new HashMap<>(viewerRoles != null ? viewerRoles : new HashMap<>());
@@ -39,9 +44,21 @@ public class FlagScreen extends Screen {
     }
 
     public void updateData(String json) {
-        org.evocraft.evoprotection.manager.ClaimManager.SyncData data = new com.google.gson.Gson().fromJson(json, org.evocraft.evoprotection.manager.ClaimManager.SyncData.class);
+        if (json == null || json.isBlank()) return;
+        org.evocraft.evoprotection.manager.ClaimManager.SyncData data;
+        try {
+            data = new com.google.gson.Gson().fromJson(json, org.evocraft.evoprotection.manager.ClaimManager.SyncData.class);
+        } catch (Exception ignored) {
+            return;
+        }
+        if (data == null) return;
+
         this.myFlags.clear();
-        if (data.myFlags != null) this.myFlags.putAll(data.myFlags);
+        if (data.myFlags != null) {
+            data.myFlags.forEach((k, v) -> {
+                if (k != null && v != null) this.myFlags.put(k, new HashMap<>(v));
+            });
+        }
         this.myClaimIds.clear();
         Set<String> flagClaims = data.flagClaimNames != null ? data.flagClaimNames : data.allClaimNames;
         if (flagClaims != null) this.myClaimIds.addAll(flagClaims);
@@ -106,7 +123,9 @@ public class FlagScreen extends Screen {
         this.clearWidgets();
         buttons.clear();
 
-        buttons.add(new CustomButton(LanguageManager.get("gui.button.back"), x + 10, y + imageHeight - 30, 120, 20, () -> this.minecraft.setScreen(parent)));
+        buttons.add(new CustomButton(LanguageManager.get("gui.button.back"), x + 10, y + imageHeight - 30, 120, 20, () -> {
+            if (this.minecraft != null) this.minecraft.setScreen(parent);
+        }));
 
         if (myClaimIds.isEmpty()) return;
 

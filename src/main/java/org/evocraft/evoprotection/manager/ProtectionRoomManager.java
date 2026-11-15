@@ -27,7 +27,6 @@ import org.evocraft.evocore.util.EvoCurrencyFormatter;
 import org.evocraft.evoprotection.network.PacketHandler;
 
 import java.sql.Connection;
-import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
@@ -71,7 +70,7 @@ public class ProtectionRoomManager {
         return thread;
     });
 
-    public static void initialize() {
+    public static synchronized void initialize() {
         if (INSTANCE == null) {
             INSTANCE = new ProtectionRoomManager();
         }
@@ -82,6 +81,29 @@ public class ProtectionRoomManager {
             initialize();
         }
         return INSTANCE;
+    }
+
+    public static void saveIfInitialized() {
+        ProtectionRoomManager inst = INSTANCE;
+        if (inst != null) {
+            inst.save();
+        }
+    }
+
+    public static synchronized void shutdown() {
+        ProtectionRoomManager inst = INSTANCE;
+        INSTANCE = null;
+        if (inst != null) {
+            inst.dbExecutor.shutdown();
+            try {
+                if (!inst.dbExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+                    inst.dbExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                inst.dbExecutor.shutdownNow();
+            }
+        }
     }
 
     private ProtectionRoomManager() {
@@ -111,12 +133,12 @@ public class ProtectionRoomManager {
     }
 
     public boolean createRoomContract(ServerPlayer admin, RoomOfferType offerType, double price, String requestedName) {
-        if (!admin.hasPermissions(2)) {
+        if (!ProtectionPermissions.hasAdminAccess(admin)) {
             admin.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] Only admins can create room contracts."));
             return false;
         }
 
-        if (!Double.isFinite(price) || price < 0.0D) {
+        if (!Double.isFinite(price) || price < 0.0D || price > 1_000_000_000_000.0D) {
             admin.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] Invalid price."));
             return false;
         }
@@ -151,12 +173,13 @@ public class ProtectionRoomManager {
     }
 
     public boolean prepareRoomSign(ServerPlayer admin, double buyPrice, double rentPrice, String requestedName) {
-        if (!admin.hasPermissions(2)) {
+        if (!ProtectionPermissions.hasAdminAccess(admin)) {
             admin.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] Only admins can create room signs."));
             return false;
         }
 
-        if (!Double.isFinite(buyPrice) || !Double.isFinite(rentPrice) || buyPrice < 0.0D || rentPrice < 0.0D) {
+        if (!Double.isFinite(buyPrice) || !Double.isFinite(rentPrice) || buyPrice < 0.0D || rentPrice < 0.0D
+                || buyPrice > 1_000_000_000_000.0D || rentPrice > 1_000_000_000_000.0D) {
             admin.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] Invalid buy/rent price."));
             return false;
         }
@@ -176,7 +199,7 @@ public class ProtectionRoomManager {
     public boolean handlePendingRoomSignPlacement(ServerPlayer admin, BlockPos clickedPos, Direction face) {
         PendingRoomSign pending = pendingSigns.get(admin.getUUID());
         if (pending == null) return false;
-        if (!admin.hasPermissions(2)) return false;
+        if (!ProtectionPermissions.hasAdminAccess(admin)) return false;
 
         if (face == null || face.getAxis().isVertical()) {
             admin.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] Click the side of a block so the sign can attach to a wall."));
@@ -302,6 +325,11 @@ public class ProtectionRoomManager {
             return false;
         }
 
+        if (room.sellerUuid != null && room.sellerUuid.equals(buyer.getUUID())) {
+            buyer.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] You cannot buy or rent your own listing."));
+            return false;
+        }
+
         if (choice == RoomOfferType.SELL && !room.canBuy()) {
             buyer.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] This room is not listed for sale."));
             return false;
@@ -318,8 +346,7 @@ public class ProtectionRoomManager {
             return false;
         }
 
-        double balance = EconomyManager.get().getBalance(buyer.getUUID());
-        if (balance < price) {
+        if (price > 0.0D && !EconomyManager.get().tryWithdraw(buyer.getUUID(), price)) {
             buyer.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] You need \u00A7e"
                     + EvoCurrencyFormatter.formatWithCurrency(price) + "\u00A7c."));
             return false;
@@ -328,8 +355,7 @@ public class ProtectionRoomManager {
         UUID previousSellerUuid = room.sellerUuid;
         String previousSellerName = room.sellerName;
 
-        if (price > 0.0D) {
-            EconomyManager.get().removeBalance(buyer.getUUID(), price);
+        if (price > 0.0D && previousSellerUuid != null && !ADMIN_UUID.equals(previousSellerUuid)) {
             EconomyManager.get().addBalance(previousSellerUuid, price);
         }
 
@@ -355,7 +381,9 @@ public class ProtectionRoomManager {
                 + (choice == RoomOfferType.RENT ? "rented " : "bought ")
                 + "\u00A7e" + room.name + "\u00A7a for \u00A7e" + EvoCurrencyFormatter.formatWithCurrency(price) + "\u00A7a."));
 
-        ServerPlayer seller = buyer.getServer() == null ? null : buyer.getServer().getPlayerList().getPlayer(previousSellerUuid);
+        ServerPlayer seller = (buyer.getServer() == null || previousSellerUuid == null)
+                ? null
+                : buyer.getServer().getPlayerList().getPlayer(previousSellerUuid);
         if (seller != null) {
             seller.sendSystemMessage(Component.literal("\u00A7a[EvoProtection] \u00A7e"
                     + buyer.getGameProfile().getName() + "\u00A7a "
@@ -399,7 +427,7 @@ public class ProtectionRoomManager {
             return false;
         }
 
-        if (!Double.isFinite(requestedPrice) || requestedPrice < 0.0D) {
+        if (!Double.isFinite(requestedPrice) || requestedPrice < 0.0D || requestedPrice > 1_000_000_000_000.0D) {
             player.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] Enter a valid price."));
             return false;
         }
@@ -429,7 +457,7 @@ public class ProtectionRoomManager {
     }
 
     public boolean placeBackupSignForPlayer(ServerPlayer admin, String playerName, BlockPos clickedPos, Direction face) {
-        if (!admin.hasPermissions(2)) {
+        if (!ProtectionPermissions.hasAdminAccess(admin)) {
             admin.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] Only admins can restore room signs."));
             return false;
         }
@@ -451,6 +479,31 @@ public class ProtectionRoomManager {
 
     public boolean isRoomSign(BlockPos pos, String dimension) {
         return getRoomBySign(pos, dimension) != null;
+    }
+
+    public boolean isRoomSignSupport(net.minecraft.world.level.Level level, BlockPos pos, String dimension) {
+        if (level == null || pos == null || dimension == null) return false;
+        for (ProtectionRoom room : rooms.values()) {
+            if (!dimension.equals(room.signDimension)) continue;
+            BlockPos signPos = room.getSignPos();
+            if (signPos == null) continue;
+            if (Math.abs(signPos.getX() - pos.getX())
+                    + Math.abs(signPos.getY() - pos.getY())
+                    + Math.abs(signPos.getZ() - pos.getZ()) != 1) {
+                continue;
+            }
+            BlockState signState = level.getBlockState(signPos);
+            if (signState.getBlock() instanceof WallSignBlock) {
+                Direction facing = signState.getValue(WallSignBlock.FACING);
+                if (signPos.relative(facing.getOpposite()).equals(pos)) {
+                    return true;
+                }
+            } else if (signState.getBlock() instanceof net.minecraft.world.level.block.StandingSignBlock
+                    && signPos.below().equals(pos)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public boolean isRoomContract(ItemStack stack) {
@@ -477,16 +530,19 @@ public class ProtectionRoomManager {
             return false;
         }
 
-        double balance = EconomyManager.get().getBalance(buyer.getUUID());
-        if (balance < room.price) {
+        if (!Double.isFinite(room.price) || room.price < 0.0D) {
+            buyer.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] This room contract is no longer valid."));
+            return false;
+        }
+
+        if (room.price > 0.0D && !EconomyManager.get().tryWithdraw(buyer.getUUID(), room.price)) {
             buyer.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] You need \u00A7e" + EvoCurrencyFormatter.formatWithCurrency(room.price) + "\u00A7c to claim this room."));
             return false;
         }
 
         UUID previousSellerUuid = room.sellerUuid;
 
-        if (room.price > 0.0D) {
-            EconomyManager.get().removeBalance(buyer.getUUID(), room.price);
+        if (room.price > 0.0D && previousSellerUuid != null && !ADMIN_UUID.equals(previousSellerUuid)) {
             EconomyManager.get().addBalance(previousSellerUuid, room.price);
         }
 
@@ -506,7 +562,9 @@ public class ProtectionRoomManager {
         ClaimEnvironmentManager.get().refreshRoomPlayers(buyer.getServer(), room.roomId);
 
         buyer.sendSystemMessage(Component.literal("\u00A7a[EvoProtection] You now own room \u00A7e" + room.name + "\u00A7a."));
-        ServerPlayer seller = buyer.getServer() == null ? null : buyer.getServer().getPlayerList().getPlayer(previousSellerUuid);
+        ServerPlayer seller = (buyer.getServer() == null || previousSellerUuid == null)
+                ? null
+                : buyer.getServer().getPlayerList().getPlayer(previousSellerUuid);
         if (seller != null) {
             seller.sendSystemMessage(Component.literal("\u00A7a[EvoProtection] \u00A7e" + buyer.getGameProfile().getName() + "\u00A7a claimed \u00A7e" + room.name + "\u00A7a for \u00A7e" + EvoCurrencyFormatter.formatWithCurrency(room.price) + "\u00A7a."));
         }
@@ -699,21 +757,22 @@ public class ProtectionRoomManager {
     }
 
     public void tickRentPayments(MinecraftServer server) {
+        if (server == null) return;
         long now = System.currentTimeMillis();
         if (now - lastRentSweepAt < RENT_SWEEP_INTERVAL_MS) return;
         lastRentSweepAt = now;
 
         for (ProtectionRoom room : rooms.values()) {
-            if (room.ownerUuid == null || room.offerType != RoomOfferType.RENT || room.rentPrice <= 0.0D) continue;
+            if (room.ownerUuid == null || room.offerType != RoomOfferType.RENT
+                    || !Double.isFinite(room.rentPrice) || room.rentPrice <= 0.0D) continue;
 
             long lastCharge = room.lastRentChargeAt <= 0L ? room.updatedAt : room.lastRentChargeAt;
             if (now - lastCharge < RENT_INTERVAL_MS) continue;
 
-            ServerPlayer renter = server == null ? null : server.getPlayerList().getPlayer(room.ownerUuid);
-            ServerPlayer seller = server == null ? null : server.getPlayerList().getPlayer(room.sellerUuid);
-            double balance = EconomyManager.get().getBalance(room.ownerUuid);
+            ServerPlayer renter = server.getPlayerList().getPlayer(room.ownerUuid);
+            ServerPlayer seller = room.sellerUuid == null ? null : server.getPlayerList().getPlayer(room.sellerUuid);
 
-            if (balance + 0.0001D < room.rentPrice) {
+            if (!EconomyManager.get().tryWithdraw(room.ownerUuid, room.rentPrice)) {
                 String renterName = room.ownerName == null ? "The renter" : room.ownerName;
                 clearRoomOwner(room);
                 room.lastRentChargeAt = 0L;
@@ -734,8 +793,9 @@ public class ProtectionRoomManager {
                 continue;
             }
 
-            EconomyManager.get().removeBalance(room.ownerUuid, room.rentPrice);
-            EconomyManager.get().addBalance(room.sellerUuid, room.rentPrice);
+            if (room.sellerUuid != null && !ADMIN_UUID.equals(room.sellerUuid)) {
+                EconomyManager.get().addBalance(room.sellerUuid, room.rentPrice);
+            }
             room.lastRentChargeAt = now;
             room.updatedAt = now;
             saveRoom(room);
@@ -752,7 +812,7 @@ public class ProtectionRoomManager {
     }
 
     public boolean removeRoomByName(ServerPlayer admin, String requestedName) {
-        if (!admin.hasPermissions(2)) {
+        if (!ProtectionPermissions.hasAdminAccess(admin)) {
             admin.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] Only admins can remove rooms."));
             return false;
         }
@@ -766,7 +826,7 @@ public class ProtectionRoomManager {
         double refund = 0.0D;
         UUID refundTarget = null;
         String refundName = "";
-        if (room.ownerUuid != null && room.offerType == RoomOfferType.SELL && room.price > 0.0D) {
+        if (room.ownerUuid != null && room.offerType == RoomOfferType.SELL && Double.isFinite(room.price) && room.price > 0.0D) {
             refund = room.price;
             refundTarget = room.ownerUuid;
             refundName = room.ownerName == null ? "player" : room.ownerName;
@@ -796,6 +856,7 @@ public class ProtectionRoomManager {
     }
 
     public void save() {
+        if (dbExecutor.isShutdown()) return;
         try {
             Future<?> flush = dbExecutor.submit(() -> { });
             flush.get(10, TimeUnit.SECONDS);
@@ -939,12 +1000,14 @@ public class ProtectionRoomManager {
 
     private ServerLevel getServerLevel(String dimension) {
         if (dimension == null || dimension.isBlank()) return null;
+        net.minecraft.resources.ResourceLocation dimLoc = net.minecraft.resources.ResourceLocation.tryParse(dimension.trim());
+        if (dimLoc == null) return null;
         net.minecraft.server.MinecraftServer server = net.minecraftforge.server.ServerLifecycleHooks.getCurrentServer();
         if (server == null) return null;
         try {
             return server.getLevel(net.minecraft.resources.ResourceKey.create(
                     net.minecraft.core.registries.Registries.DIMENSION,
-                    new net.minecraft.resources.ResourceLocation(dimension)));
+                    dimLoc));
         } catch (Exception ignored) {
             return null;
         }
@@ -1106,12 +1169,36 @@ public class ProtectionRoomManager {
         return stack;
     }
 
+    private void queueDbWrite(Runnable task) {
+        Runnable wrapped = () -> {
+            synchronized (DatabaseManager.get()) {
+                try {
+                    task.run();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        };
+        if (dbExecutor.isShutdown()) {
+            wrapped.run();
+            return;
+        }
+        try {
+            dbExecutor.execute(wrapped);
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            wrapped.run();
+        }
+    }
+
     private void loadFromDatabase() {
         rooms.clear();
         roomIdsByChunk.clear();
         synchronized (DatabaseManager.get()) {
             try {
                 Connection conn = DatabaseManager.get().getConnection();
+                if (conn == null) {
+                    throw new IllegalStateException("Database connection is unavailable.");
+                }
                 try (Statement stmt = conn.createStatement()) {
                     stmt.executeUpdate("CREATE TABLE IF NOT EXISTS " + ROOM_TABLE + " (" +
                             "room_id VARCHAR(64) PRIMARY KEY, " +
@@ -1156,6 +1243,10 @@ public class ProtectionRoomManager {
                      ResultSet rs = stmt.executeQuery()) {
                     while (rs.next()) {
                         ProtectionRoom room = readRoom(rs);
+                        if (room.roomId == null || room.roomId.isBlank()
+                                || room.dimension == null || room.dimension.isBlank()) {
+                            continue;
+                        }
                         rooms.put(room.roomId, room);
                         indexRoom(room);
                     }
@@ -1170,53 +1261,78 @@ public class ProtectionRoomManager {
 
     private void saveRoom(ProtectionRoom room) {
         ProtectionRoom snapshot = room.copy();
-        dbExecutor.execute(() -> {
-            synchronized (DatabaseManager.get()) {
-                try {
-                    Connection conn = DatabaseManager.get().getConnection();
-                    try (PreparedStatement stmt = conn.prepareStatement(
-                            "INSERT INTO " + ROOM_TABLE + " (" +
-                                    "room_id, dimension, parent_claim_id, name, min_x, min_y, min_z, max_x, max_y, max_z, " +
-                                    "offer_type, price, buy_price, rent_price, listing_mode, seller_uuid, seller_name, owner_uuid, owner_name, contract_token, " +
-                                    "last_rent_charge_at, sign_dimension, sign_x, sign_y, sign_z, flags_json, trust_json, created_at, updated_at" +
-                                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
-                                    "ON DUPLICATE KEY UPDATE " +
-                                    "dimension=VALUES(dimension), parent_claim_id=VALUES(parent_claim_id), name=VALUES(name), " +
-                                    "min_x=VALUES(min_x), min_y=VALUES(min_y), min_z=VALUES(min_z), " +
-                                    "max_x=VALUES(max_x), max_y=VALUES(max_y), max_z=VALUES(max_z), " +
-                                    "offer_type=VALUES(offer_type), price=VALUES(price), buy_price=VALUES(buy_price), rent_price=VALUES(rent_price), " +
-                                    "listing_mode=VALUES(listing_mode), seller_uuid=VALUES(seller_uuid), " +
-                                    "seller_name=VALUES(seller_name), owner_uuid=VALUES(owner_uuid), owner_name=VALUES(owner_name), " +
-                                    "contract_token=VALUES(contract_token), last_rent_charge_at=VALUES(last_rent_charge_at), " +
-                                    "sign_dimension=VALUES(sign_dimension), sign_x=VALUES(sign_x), " +
-                                    "sign_y=VALUES(sign_y), sign_z=VALUES(sign_z), flags_json=VALUES(flags_json), trust_json=VALUES(trust_json), " +
-                                    "created_at=VALUES(created_at), updated_at=VALUES(updated_at)")) {
-                        bindRoom(stmt, snapshot);
-                        stmt.executeUpdate();
-                    }
-                } catch (Exception e) {
-                    System.err.println("[EvoProtection] Failed to save protection room " + snapshot.roomId + ".");
-                    e.printStackTrace();
+        queueDbWrite(() -> {
+            try {
+                Connection conn = DatabaseManager.get().getConnection();
+                if (conn == null) return;
+                boolean sqlite = DatabaseManager.get().isSqlite();
+                String sql = sqlite
+                        ? "INSERT INTO " + ROOM_TABLE + " (" +
+                        "room_id, dimension, parent_claim_id, name, min_x, min_y, min_z, max_x, max_y, max_z, " +
+                        "offer_type, price, buy_price, rent_price, listing_mode, seller_uuid, seller_name, owner_uuid, owner_name, contract_token, " +
+                        "last_rent_charge_at, sign_dimension, sign_x, sign_y, sign_z, flags_json, trust_json, created_at, updated_at" +
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                        "ON CONFLICT(room_id) DO UPDATE SET " +
+                        "dimension=excluded.dimension, parent_claim_id=excluded.parent_claim_id, name=excluded.name, " +
+                        "min_x=excluded.min_x, min_y=excluded.min_y, min_z=excluded.min_z, " +
+                        "max_x=excluded.max_x, max_y=excluded.max_y, max_z=excluded.max_z, " +
+                        "offer_type=excluded.offer_type, price=excluded.price, buy_price=excluded.buy_price, rent_price=excluded.rent_price, " +
+                        "listing_mode=excluded.listing_mode, seller_uuid=excluded.seller_uuid, " +
+                        "seller_name=excluded.seller_name, owner_uuid=excluded.owner_uuid, owner_name=excluded.owner_name, " +
+                        "contract_token=excluded.contract_token, last_rent_charge_at=excluded.last_rent_charge_at, " +
+                        "sign_dimension=excluded.sign_dimension, sign_x=excluded.sign_x, " +
+                        "sign_y=excluded.sign_y, sign_z=excluded.sign_z, flags_json=excluded.flags_json, trust_json=excluded.trust_json, " +
+                        "created_at=excluded.created_at, updated_at=excluded.updated_at"
+                        : "INSERT INTO " + ROOM_TABLE + " (" +
+                        "room_id, dimension, parent_claim_id, name, min_x, min_y, min_z, max_x, max_y, max_z, " +
+                        "offer_type, price, buy_price, rent_price, listing_mode, seller_uuid, seller_name, owner_uuid, owner_name, contract_token, " +
+                        "last_rent_charge_at, sign_dimension, sign_x, sign_y, sign_z, flags_json, trust_json, created_at, updated_at" +
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                        "ON DUPLICATE KEY UPDATE " +
+                        "dimension=VALUES(dimension), parent_claim_id=VALUES(parent_claim_id), name=VALUES(name), " +
+                        "min_x=VALUES(min_x), min_y=VALUES(min_y), min_z=VALUES(min_z), " +
+                        "max_x=VALUES(max_x), max_y=VALUES(max_y), max_z=VALUES(max_z), " +
+                        "offer_type=VALUES(offer_type), price=VALUES(price), buy_price=VALUES(buy_price), rent_price=VALUES(rent_price), " +
+                        "listing_mode=VALUES(listing_mode), seller_uuid=VALUES(seller_uuid), " +
+                        "seller_name=VALUES(seller_name), owner_uuid=VALUES(owner_uuid), owner_name=VALUES(owner_name), " +
+                        "contract_token=VALUES(contract_token), last_rent_charge_at=VALUES(last_rent_charge_at), " +
+                        "sign_dimension=VALUES(sign_dimension), sign_x=VALUES(sign_x), " +
+                        "sign_y=VALUES(sign_y), sign_z=VALUES(sign_z), flags_json=VALUES(flags_json), trust_json=VALUES(trust_json), " +
+                        "created_at=VALUES(created_at), updated_at=VALUES(updated_at)";
+                try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                    bindRoom(stmt, snapshot);
+                    stmt.executeUpdate();
                 }
+            } catch (Exception e) {
+                System.err.println("[EvoProtection] Failed to save protection room " + snapshot.roomId + ".");
+                e.printStackTrace();
             }
         });
     }
 
     private void deleteRoom(String roomId) {
-        dbExecutor.execute(() -> {
-            synchronized (DatabaseManager.get()) {
-                try {
-                    Connection conn = DatabaseManager.get().getConnection();
-                    try (PreparedStatement stmt = conn.prepareStatement("DELETE FROM " + ROOM_TABLE + " WHERE room_id = ?")) {
-                        stmt.setString(1, roomId);
-                        stmt.executeUpdate();
-                    }
-                } catch (Exception e) {
-                    System.err.println("[EvoProtection] Failed to delete protection room " + roomId + ".");
-                    e.printStackTrace();
+        queueDbWrite(() -> {
+            try {
+                Connection conn = DatabaseManager.get().getConnection();
+                if (conn == null) return;
+                try (PreparedStatement stmt = conn.prepareStatement("DELETE FROM " + ROOM_TABLE + " WHERE room_id = ?")) {
+                    stmt.setString(1, roomId);
+                    stmt.executeUpdate();
                 }
+            } catch (Exception e) {
+                System.err.println("[EvoProtection] Failed to delete protection room " + roomId + ".");
+                e.printStackTrace();
             }
         });
+    }
+
+    private static UUID parseUuid(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        try {
+            return UUID.fromString(raw.trim());
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 
     private void bindRoom(PreparedStatement stmt, ProtectionRoom room) throws Exception {
@@ -1235,7 +1351,7 @@ public class ProtectionRoomManager {
         stmt.setDouble(13, room.buyPrice);
         stmt.setDouble(14, room.rentPrice);
         stmt.setString(15, room.listingMode.name());
-        stmt.setString(16, room.sellerUuid.toString());
+        stmt.setString(16, room.sellerUuid == null ? null : room.sellerUuid.toString());
         stmt.setString(17, room.sellerName);
         stmt.setString(18, room.ownerUuid == null ? null : room.ownerUuid.toString());
         stmt.setString(19, room.ownerName);
@@ -1268,10 +1384,9 @@ public class ProtectionRoomManager {
         room.buyPrice = readDouble(rs, "buy_price", room.offerType == RoomOfferType.SELL ? room.price : -1.0D);
         room.rentPrice = readDouble(rs, "rent_price", room.offerType == RoomOfferType.RENT ? room.price : -1.0D);
         room.listingMode = parseListingMode(readString(rs, "listing_mode", "BOTH"));
-        room.sellerUuid = UUID.fromString(rs.getString("seller_uuid"));
+        room.sellerUuid = parseUuid(rs.getString("seller_uuid"));
         room.sellerName = rs.getString("seller_name");
-        String ownerUuid = rs.getString("owner_uuid");
-        room.ownerUuid = ownerUuid == null || ownerUuid.isEmpty() ? null : UUID.fromString(ownerUuid);
+        room.ownerUuid = parseUuid(rs.getString("owner_uuid"));
         room.ownerName = rs.getString("owner_name");
         room.contractToken = rs.getString("contract_token");
         room.lastRentChargeAt = readLong(rs, "last_rent_charge_at", 0L);
@@ -1311,7 +1426,8 @@ public class ProtectionRoomManager {
             JsonObject object = JsonParser.parseString(json).getAsJsonObject();
             for (Map.Entry<String, JsonElement> entry : object.entrySet()) {
                 if (!entry.getValue().isJsonPrimitive()) continue;
-                UUID playerUuid = UUID.fromString(entry.getKey());
+                UUID playerUuid = parseUuid(entry.getKey());
+                if (playerUuid == null) continue;
                 String role = ClaimManager.normalizeTrustRole(entry.getValue().getAsString());
                 if (!ClaimManager.ROLE_VISITOR.equals(role)) {
                     roles.put(playerUuid, role);
@@ -1323,17 +1439,7 @@ public class ProtectionRoomManager {
     }
 
     private void ensureColumn(Connection conn, String column, String definition) {
-        try {
-            DatabaseMetaData meta = conn.getMetaData();
-            try (ResultSet columns = meta.getColumns(null, null, ROOM_TABLE, column)) {
-                if (columns.next()) return;
-            }
-
-            try (Statement stmt = conn.createStatement()) {
-                stmt.executeUpdate("ALTER TABLE " + ROOM_TABLE + " ADD COLUMN " + column + " " + definition);
-            }
-        } catch (Exception ignored) {
-        }
+        DatabaseManager.get().ensureColumn(ROOM_TABLE, column, definition);
     }
 
     private boolean hasColumn(ResultSet rs, String column) {

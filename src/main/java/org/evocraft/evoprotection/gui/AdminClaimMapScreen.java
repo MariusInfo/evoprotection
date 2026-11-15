@@ -97,7 +97,7 @@ public class AdminClaimMapScreen extends Screen {
         this.addRenderableWidget(nameField);
 
         buttons.add(new CustomButton(LanguageManager.get("gui.button.settings"), finalX + 30, finalY + targetH - 35, 120, 20, () -> {
-            if (cachedData != null) {
+            if (cachedData != null && this.minecraft != null) {
                 Set<String> flagClaims = cachedData.flagClaimNames != null ? cachedData.flagClaimNames : cachedData.allClaimNames;
                 this.minecraft.setScreen(new FlagScreen(this, cachedData.myFlags, flagClaims,
                         cachedData.claimDisplayNames, cachedData.claimOwnerNames,
@@ -105,7 +105,7 @@ public class AdminClaimMapScreen extends Screen {
             }
         }));
         buttons.add(new CustomButton(LanguageManager.get("gui.button.friends"), finalX + 155, finalY + targetH - 35, 120, 20, () -> {
-            if (cachedData != null) {
+            if (cachedData != null && this.minecraft != null) {
                 Set<String> trustClaims = cachedData.trustClaimNames != null ? cachedData.trustClaimNames : cachedData.allClaimNames;
                 this.minecraft.setScreen(new TrustScreen(this, cachedData.trustedPerClaim,
                         cachedData.trustedRolesPerClaim, trustClaims, cachedData.claimDisplayNames));
@@ -117,10 +117,17 @@ public class AdminClaimMapScreen extends Screen {
     }
 
     public void updateData(String json) {
-        this.cachedData = new Gson().fromJson(json, ClaimManager.SyncData.class);
+        if (json == null || json.isBlank()) return;
+        try {
+            ClaimManager.SyncData parsed = new Gson().fromJson(json, ClaimManager.SyncData.class);
+            if (parsed != null) {
+                this.cachedData = parsed;
+            }
+        } catch (Exception ignored) { }
     }
 
     private void generateMapTexture() {
+        if (this.minecraft == null || this.centerChunk == null) return;
         int mapDiameterChunks = this.radius * 2 + 1;
         int mapBlocks = mapDiameterChunks * 16;
         int finalImageSize = mapBlocks * this.pixelScale;
@@ -236,6 +243,7 @@ public class AdminClaimMapScreen extends Screen {
     }
 
     private void drawClaimsOverlay(GuiGraphics g, int mx, int my, int startX, int startY) {
+        if (centerChunk == null) return;
         String tooltipL1 = null;
         String tooltipL2 = null;
 
@@ -246,7 +254,7 @@ public class AdminClaimMapScreen extends Screen {
                 String key = (centerChunk.x + cx) + ";" + (centerChunk.z + cz);
 
                 g.renderOutline(drawX, drawY, this.chunkSize, this.chunkSize, 0x2AFFFFFF);
-                ClaimManager.ClientClaimInfo info = cachedData != null ? cachedData.map.get(key) : null;
+                ClaimManager.ClientClaimInfo info = (cachedData != null && cachedData.map != null) ? cachedData.map.get(key) : null;
 
                 if (info != null) {
                     boolean isAdmin = (info.ownerName != null && info.ownerName.contains("Admin")) || (info.ownerUUID != null && info.ownerUUID.getMostSignificantBits() == 0);
@@ -259,7 +267,7 @@ public class AdminClaimMapScreen extends Screen {
                 if (mx >= drawX && mx <= drawX + this.chunkSize && my >= drawY && my <= drawY + this.chunkSize) {
                     g.fill(drawX, drawY, drawX + this.chunkSize, drawY + this.chunkSize, 0x33FFFFFF);
                     if (info != null) {
-                        tooltipL1 = "§c" + info.ownerName;
+                        tooltipL1 = "§c" + (info.ownerName != null ? info.ownerName : "Unknown");
                         if (info.customName != null && !info.customName.isEmpty()) tooltipL2 = "§8(§e" + info.customName + "§8)";
                     } else {
                         tooltipL1 = "§7Wilderness";
@@ -283,6 +291,7 @@ public class AdminClaimMapScreen extends Screen {
             for (CustomButton b : buttons) {
                 if (b.checkClick((int)smx, (int)smy)) return true;
             }
+            if (centerChunk == null) return super.mouseClicked(smx, smy, button);
 
             int sw = (int) (this.width / scale);
             int sh = (int) (this.height / scale);
@@ -301,7 +310,7 @@ public class AdminClaimMapScreen extends Screen {
                         int rChunkZ = centerChunk.z + cz;
                         String key = rChunkX + ";" + rChunkZ;
 
-                        ClaimManager.ClientClaimInfo info = cachedData != null ? cachedData.map.get(key) : null;
+                        ClaimManager.ClientClaimInfo info = (cachedData != null && cachedData.map != null) ? cachedData.map.get(key) : null;
                         if (info == null) {
                             String claimName = nameField != null ? nameField.getValue().trim() : "";
                             if (claimName.isEmpty() || claimName.equals(LanguageManager.get("gui.admin.name"))) {

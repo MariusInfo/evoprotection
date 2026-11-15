@@ -19,13 +19,21 @@ public class DeleteClaimScreen extends Screen {
     public DeleteClaimScreen(Screen parent, Set<String> allClaimNames, Map<String, String> claimDisplayNames) {
         super(Component.literal("Delete Protections"));
         this.parent = parent;
-        this.myClaimIds = new ArrayList<>(allClaimNames);
+        this.myClaimIds = new ArrayList<>(allClaimNames != null ? allClaimNames : Set.of());
         this.claimDisplayNames = new HashMap<>(claimDisplayNames != null ? claimDisplayNames : new HashMap<>());
         sortClaims();
     }
 
     public void updateData(String json) {
-        org.evocraft.evoprotection.manager.ClaimManager.SyncData data = new com.google.gson.Gson().fromJson(json, org.evocraft.evoprotection.manager.ClaimManager.SyncData.class);
+        if (json == null || json.isBlank()) return;
+        org.evocraft.evoprotection.manager.ClaimManager.SyncData data;
+        try {
+            data = new com.google.gson.Gson().fromJson(json, org.evocraft.evoprotection.manager.ClaimManager.SyncData.class);
+        } catch (Exception ignored) {
+            return;
+        }
+        if (data == null) return;
+
         this.myClaimIds.clear();
         if (data.allClaimNames != null) this.myClaimIds.addAll(data.allClaimNames);
 
@@ -77,7 +85,9 @@ public class DeleteClaimScreen extends Screen {
         this.clearWidgets();
         buttons.clear();
 
-        buttons.add(new CustomButton(LanguageManager.get("gui.button.back"), x + 10, y + imageHeight - 30, 120, 20, () -> this.minecraft.setScreen(parent)));
+        buttons.add(new CustomButton(LanguageManager.get("gui.button.back"), x + 10, y + imageHeight - 30, 120, 20, () -> {
+            if (this.minecraft != null) this.minecraft.setScreen(parent);
+        }));
         if (myClaimIds.isEmpty()) return;
 
         int listY = y + 50;

@@ -3,6 +3,7 @@ package org.evocraft.evoprotection;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.event.server.ServerStartingEvent;
+import net.minecraftforge.event.server.ServerStoppedEvent;
 import net.minecraftforge.event.server.ServerStoppingEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -35,8 +36,6 @@ public class EvoProtection {
         MinecraftForge.EVENT_BUS.addListener((RegisterCommandsEvent event) -> {
             ClaimCommand.register(event.getDispatcher());
         });
-
-        MinecraftForge.EVENT_BUS.register(ProtectionEvents.class);
     }
 
     private void setup(final FMLCommonSetupEvent event) {
@@ -52,6 +51,7 @@ public class EvoProtection {
 
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
+        ProtectionEvents.clearRuntime();
         ClaimManager.initialize();
         ProtectionRoomManager.initialize();
     }
@@ -59,7 +59,16 @@ public class EvoProtection {
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
         ClaimEnvironmentManager.get().clearRuntime(event.getServer());
-        if (ClaimManager.get() != null) ClaimManager.get().save();
-        if (ProtectionRoomManager.get() != null) ProtectionRoomManager.get().save();
+        ClaimManager.saveIfInitialized();
+        ProtectionRoomManager.saveIfInitialized();
+    }
+
+    @SubscribeEvent
+    public void onServerStopped(ServerStoppedEvent event) {
+        ClaimEnvironmentManager.get().clearRuntime(event.getServer());
+        ClaimManager.shutdown();
+        ProtectionRoomManager.shutdown();
+        ProtectionEvents.clearRuntime();
+        PacketHandler.clearRuntime();
     }
 }

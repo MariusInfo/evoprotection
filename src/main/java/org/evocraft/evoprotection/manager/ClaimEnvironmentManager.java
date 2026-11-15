@@ -73,15 +73,16 @@ public class ClaimEnvironmentManager {
     public void installInterceptor(ServerPlayer player) {
         if (player == null || player.connection == null || player.connection.connection == null) return;
         Channel channel = player.connection.connection.channel();
-        if (channel == null) return;
+        if (channel == null || !channel.isOpen()) return;
 
         UUID playerId = player.getUUID();
         channel.eventLoop().execute(() -> {
+            if (!channel.isOpen() || !channel.isRegistered()) return;
             ChannelPipeline pipeline = channel.pipeline();
             if (pipeline.get(PIPELINE_HANDLER_NAME) != null) return;
 
             ClaimEnvironmentPacketInterceptor interceptor = new ClaimEnvironmentPacketInterceptor(playerId);
-            if (pipeline.get("encoder") != null) {
+            if (pipeline.context("encoder") != null) {
                 pipeline.addAfter("encoder", PIPELINE_HANDLER_NAME, interceptor);
             } else {
                 pipeline.addLast(PIPELINE_HANDLER_NAME, interceptor);
@@ -97,7 +98,10 @@ public class ClaimEnvironmentManager {
         channel.eventLoop().execute(() -> {
             ChannelPipeline pipeline = channel.pipeline();
             if (pipeline.get(PIPELINE_HANDLER_NAME) != null) {
-                pipeline.remove(PIPELINE_HANDLER_NAME);
+                try {
+                    pipeline.remove(PIPELINE_HANDLER_NAME);
+                } catch (java.util.NoSuchElementException ignored) {
+                }
             }
         });
     }
@@ -214,7 +218,7 @@ public class ClaimEnvironmentManager {
     }
 
     private void refreshPlayer(ServerPlayer player, boolean force) {
-        if (player == null) return;
+        if (player == null || player.connection == null || player.hasDisconnected()) return;
 
         String dim = player.level().dimension().location().toString();
         ChunkPos current = player.chunkPosition();
@@ -293,6 +297,7 @@ public class ClaimEnvironmentManager {
     }
 
     private void applyEnvironment(ServerPlayer player, EnvironmentState state) {
+        if (player == null || player.connection == null || player.hasDisconnected()) return;
         applyTimeOverride(player, state.timeMode);
         applyWeatherOverride(player, state.weatherMode);
 
@@ -307,6 +312,7 @@ public class ClaimEnvironmentManager {
     }
 
     private void applyTimeOverride(ServerPlayer player, int timeMode) {
+        if (player == null || player.connection == null || player.hasDisconnected()) return;
         long dayTime = player.level().getDayTime();
         boolean daylightCycle = player.level().getGameRules().getBoolean(GameRules.RULE_DAYLIGHT);
 
@@ -337,6 +343,7 @@ public class ClaimEnvironmentManager {
     }
 
     private void sendWeather(ServerPlayer player, boolean raining, float rainLevel, float thunderLevel) {
+        if (player == null || player.connection == null || player.hasDisconnected()) return;
         player.connection.send(new ClientboundGameEventPacket(raining ? ClientboundGameEventPacket.START_RAINING : ClientboundGameEventPacket.STOP_RAINING, 0.0F));
         player.connection.send(new ClientboundGameEventPacket(ClientboundGameEventPacket.RAIN_LEVEL_CHANGE, rainLevel));
         player.connection.send(new ClientboundGameEventPacket(ClientboundGameEventPacket.THUNDER_LEVEL_CHANGE, thunderLevel));
