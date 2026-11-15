@@ -7,20 +7,23 @@ import net.minecraftforge.fml.loading.FMLPaths;
 
 import java.io.*;
 import java.lang.reflect.Type;
+import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class LanguageManager {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final File DIR = FMLPaths.CONFIGDIR.get().resolve("evoprotection_lang").toFile();
 
     // Stocam AMBELE dictionare in memorie (ro si en)
-    private static final Map<String, Map<String, String>> dicts = new HashMap<>();
+    private static final Map<String, Map<String, String>> dicts = new ConcurrentHashMap<>();
 
     // Limba locala a clientului pentru interfetele grafice
-    public static String clientLang = "en";
+    public static volatile String clientLang = "en";
 
     public static void load() {
         if (!DIR.exists()) {
@@ -39,7 +42,7 @@ public class LanguageManager {
 
         // Daca fisierul exista deja, il citim in memorie
         if (file.exists()) {
-            try (Reader reader = new FileReader(file)) {
+            try (Reader reader = new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8)) {
                 Type type = new TypeToken<Map<String, String>>(){}.getType();
                 currentFileDict = GSON.fromJson(reader, type);
                 if (currentFileDict == null) {
@@ -64,7 +67,7 @@ public class LanguageManager {
 
         // Daca fisierul nu exista SAU au fost adaugate texte noi prin update, salvam fisierul.
         if (!file.exists() || needsUpdate) {
-            try (Writer writer = new FileWriter(file)) {
+            try (Writer writer = new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8)) {
                 GSON.toJson(currentFileDict, writer);
             } catch (Exception e) {
                 e.printStackTrace();
@@ -72,12 +75,13 @@ public class LanguageManager {
         }
 
         // Punem in memorie dictionarul final (cu eventualele modificari ale adminului pastrate)
-        dicts.put(lang, currentFileDict);
+        dicts.put(lang, Collections.unmodifiableMap(new HashMap<>(currentFileDict)));
     }
 
     // GETTER PENTRU SERVER (Cauta in limba specifica a jucatorului)
     public static String get(String lang, String key) {
-        Map<String, String> dict = dicts.getOrDefault(lang, dicts.get("ro"));
+        String safeLang = lang == null ? "ro" : lang;
+        Map<String, String> dict = dicts.getOrDefault(safeLang, dicts.get("ro"));
         if (dict == null) {
             return key;
         }
@@ -86,9 +90,13 @@ public class LanguageManager {
 
     public static String get(String lang, String key, Object... args) {
         try {
-            return String.format(get(lang, key), args);
+            return String.format(Locale.ROOT, get(lang, key), args);
         } catch (Exception ignored) {
-            return String.format(getDefaults(lang).getOrDefault(key, key), args);
+            try {
+                return String.format(Locale.ROOT, getDefaults(lang == null ? "ro" : lang).getOrDefault(key, key), args);
+            } catch (Exception ignoredAgain) {
+                return get(lang, key);
+            }
         }
     }
 
@@ -140,16 +148,7 @@ public class LanguageManager {
         Map<String, String> dict = new HashMap<>();
 
         if (lang.equals("en")) {
-            dict.put("msg.plot.occupied", "§c[X] This plot is already occupied!");
-            dict.put("msg.plot.bought", "§a[V] You have purchased the plot!");
-            dict.put("msg.plot.limit", "§c[X] Maximum plot limit reached! Buy an Upgrade from the map (M).");
-            dict.put("msg.plot.abandoned", "§a[V] You abandoned the plot!");
             dict.put("msg.claim.deleted", "§a[V] You successfully deleted the protection: §e%s");
-            dict.put("msg.road.reserved", "§c[X] This space is reserved for the road!");
-            dict.put("msg.plot.not_plot_mode", "§cThe server is not in Plot mode!");
-            dict.put("msg.plot.auto_received", "§aYou automatically received a new plot!");
-            dict.put("msg.plot.tp_home", "§aYou teleported to your plot!");
-            dict.put("msg.plot.no_plot", "§cYou don't have a plot! Use /plot auto");
             dict.put("msg.buy.success", "§a[V] Extra limit purchased! You can now expand.");
             dict.put("msg.buy.no_money", "§c[!] Not enough money available!");
             dict.put("msg.event.bought", "§a[Protection Event] §e%s bought a discounted slot! Stock left: §c%d");
@@ -164,26 +163,20 @@ public class LanguageManager {
             dict.put("gui.button.friends", "§e[+] Friends");
             dict.put("gui.button.settings", "§b[*] Settings");
             dict.put("gui.button.delete", "§c[x] Delete");
-            dict.put("gui.button.buy_plot", "§a+ Buy Upgrade");
             dict.put("gui.button.buy_chunk", "§a+ Buy Limit");
             dict.put("gui.button.lang", "§d[ENG]");
 
             // Map
             dict.put("gui.map.info", "§a§lLand Information:");
-            dict.put("gui.map.limit_plot", "Plots Limit:");
             dict.put("gui.map.limit_chunk", "Chunks Limit:");
             dict.put("gui.map.money", "Your Balance: §e%s");
             dict.put("gui.map.price", "Slot Upgrade Price: §c%s");
             dict.put("gui.map.click_info", "§7Click on the map to:");
-            dict.put("gui.map.click_plot", "§7Buy a new Plot");
             dict.put("gui.map.click_chunk", "§7Buy selected Chunk");
             dict.put("gui.map.click_delete", "§7Or delete owned land");
-            dict.put("gui.map.road", "§c[!] That is a public road!");
             dict.put("gui.map.name_req", "§c[!] Put a name in the box!");
             dict.put("gui.map.owned_other", "§c[!] Land belongs to someone else!");
-            dict.put("gui.map.title_plot", "§lEVO PLOTS");
             dict.put("gui.map.title_chunk", "§lEVO PROTECTIONS");
-            dict.put("gui.map.plot_name", "Plot Name");
             dict.put("gui.map.chunk_name", "Chunk Name");
             dict.put("gui.status.on", "§aON");
             dict.put("gui.status.off", "§cOFF");
@@ -191,14 +184,11 @@ public class LanguageManager {
 
             // Trust
             dict.put("gui.trust.title", "§lFRIENDS MANAGEMENT");
-            dict.put("gui.trust.title_plot", "§lPLOT FRIENDS");
             dict.put("gui.trust.add", "Add Permission:");
             dict.put("gui.trust.list", "Friends List (Can build/destroy):");
             dict.put("gui.trust.empty", "- You haven't added anyone here -");
             dict.put("gui.trust.btn_add", "§aAdd Friend");
-            dict.put("gui.trust.no_plot", "§cYou have no plot created!");
             dict.put("gui.trust.no_claim", "§cYou have no protection created!");
-            dict.put("gui.trust.selected_plot", "Selected Plot: §e");
             dict.put("gui.trust.selected_claim", "Selected Protection: §e");
             dict.put("gui.trust.role.coowner", "Coowner");
             dict.put("gui.trust.role.admin", "Admin");
@@ -242,16 +232,7 @@ public class LanguageManager {
 
         } else {
             // Fallback language kept in English for a consistent UI.
-            dict.put("msg.plot.occupied", "§c[X] This plot is already occupied!");
-            dict.put("msg.plot.bought", "§a[V] You bought the plot!");
-            dict.put("msg.plot.limit", "§c[X] You reached the maximum plot limit! Buy an upgrade from the map (M).");
-            dict.put("msg.plot.abandoned", "§a[V] You abandoned the plot!");
             dict.put("msg.claim.deleted", "§a[V] Successfully deleted protection: §e%s");
-            dict.put("msg.road.reserved", "§c[X] This space is reserved for a road!");
-            dict.put("msg.plot.not_plot_mode", "§cThe server is not in Plot mode!");
-            dict.put("msg.plot.auto_received", "§aYou received a new plot automatically!");
-            dict.put("msg.plot.tp_home", "§aTeleported to your plot!");
-            dict.put("msg.plot.no_plot", "§cYou do not have a plot! Use /plot auto");
             dict.put("msg.buy.success", "§a[V] You bought an extra limit! You can expand now.");
             dict.put("msg.buy.no_money", "§c[!] You do not have enough Evo!");
             dict.put("msg.event.bought", "§a[Protection Event] §e%s bought a discounted slot! Stock left: §c%d");
@@ -265,26 +246,20 @@ public class LanguageManager {
             dict.put("gui.button.friends", "§e[+] Friends");
             dict.put("gui.button.settings", "§b[*] Settings");
             dict.put("gui.button.delete", "§c[x] Delete");
-            dict.put("gui.button.buy_plot", "§a+ Buy Upgrade");
             dict.put("gui.button.buy_chunk", "§a+ Buy Limit");
             dict.put("gui.button.lang", "§d[ENG]");
 
             // Map
             dict.put("gui.map.info", "§a§lLand Information:");
-            dict.put("gui.map.limit_plot", "Plots Limit:");
             dict.put("gui.map.limit_chunk", "Chunks Limit:");
             dict.put("gui.map.money", "Your Balance: §e%s");
             dict.put("gui.map.price", "Slot Upgrade Price: §c%s");
             dict.put("gui.map.click_info", "§7Click on the map to:");
-            dict.put("gui.map.click_plot", "§7Buy a new Plot");
             dict.put("gui.map.click_chunk", "§7Buy selected Chunk");
             dict.put("gui.map.click_delete", "§7Or delete owned land");
-            dict.put("gui.map.road", "§c[!] That is a public road!");
             dict.put("gui.map.name_req", "§c[!] Put a name in the box!");
             dict.put("gui.map.owned_other", "§c[!] Land belongs to someone else!");
-            dict.put("gui.map.title_plot", "§lEVO PLOTS");
             dict.put("gui.map.title_chunk", "§lEVO PROTECTIONS");
-            dict.put("gui.map.plot_name", "Plot Name");
             dict.put("gui.map.chunk_name", "Chunk Name");
             dict.put("gui.status.on", "§aON");
             dict.put("gui.status.off", "§cOFF");
@@ -292,14 +267,11 @@ public class LanguageManager {
 
             // Trust
             dict.put("gui.trust.title", "§lFRIENDS MANAGEMENT");
-            dict.put("gui.trust.title_plot", "§lPLOT FRIENDS");
             dict.put("gui.trust.add", "Add Permission:");
             dict.put("gui.trust.list", "Friends List (Can build/destroy):");
             dict.put("gui.trust.empty", "- You haven't added anyone here -");
             dict.put("gui.trust.btn_add", "§aAdd Friend");
-            dict.put("gui.trust.no_plot", "§cYou have no plot created!");
             dict.put("gui.trust.no_claim", "§cYou have no protection created!");
-            dict.put("gui.trust.selected_plot", "Selected Plot: §e");
             dict.put("gui.trust.selected_claim", "Selected Protection: §e");
             dict.put("gui.trust.role.coowner", "Coowner");
             dict.put("gui.trust.role.admin", "Admin");

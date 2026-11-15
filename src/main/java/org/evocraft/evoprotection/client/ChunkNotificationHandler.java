@@ -23,16 +23,17 @@ public class ChunkNotificationHandler {
     private static final int FADE_OUT = 15;
 
     public static void onEnterNewChunk(String ownerName) {
+        String safeOwner = ownerName == null ? "Wilderness" : ownerName;
         String newMessage;
         String newSub;
         boolean wild = false;
 
-        if (ownerName.equals("Wilderness")) {
+        if (safeOwner.equals("Wilderness")) {
             newMessage = "Wilderness";
             newSub = "Free Territory (No Protection)";
             wild = true;
         } else {
-            newMessage = ownerName;
+            newMessage = safeOwner;
             newSub = "Protected Area";
         }
 
@@ -44,6 +45,14 @@ public class ChunkNotificationHandler {
 
         // Resetăm animația
         animationTick = FADE_IN + STAY + FADE_OUT;
+    }
+
+    @SubscribeEvent
+    public static void onClientLogout(net.minecraftforge.client.event.ClientPlayerNetworkEvent.LoggingOut event) {
+        displayMessage = "";
+        subMessage = "";
+        isWilderness = true;
+        animationTick = 0;
     }
 
     @SubscribeEvent
@@ -61,6 +70,7 @@ public class ChunkNotificationHandler {
         if (animationTick > 0 && !displayMessage.isEmpty()) {
             GuiGraphics g = event.getGuiGraphics();
             Minecraft mc = Minecraft.getInstance();
+            if (mc.font == null) return;
             int w = event.getWindow().getGuiScaledWidth();
 
             // Calculare Transparență și Efect de Slide (Lerp & Pow)

@@ -14,16 +14,11 @@ import org.evocraft.evoprotection.manager.LanguageManager;
 public class ClientPacketHandler {
 
     public static void handleSyncLanguage(String lang) {
-        LanguageManager.clientLang = lang;
+        LanguageManager.clientLang = "en".equalsIgnoreCase(lang) ? "en" : "ro";
         Minecraft mc = Minecraft.getInstance();
         if (mc.screen != null) {
             mc.screen.init(mc, mc.screen.width, mc.screen.height);
         }
-    }
-
-    public static void handleSyncPayDay(int secondsLeft, boolean isIdle) {
-        org.evocraft.evoprotection.client.ClientPayDayData.secondsLeft = secondsLeft;
-        org.evocraft.evoprotection.client.ClientPayDayData.isIdle = isIdle;
     }
 
     public static void handleEnvironmentOverride(int timeMode, int weatherMode, long serverDayTime, boolean serverRaining, float serverRainLevel, float serverThunderLevel) {
@@ -32,7 +27,10 @@ public class ClientPacketHandler {
 
     public static void handleOpenRoomOffer(String roomId, String roomName, double buyPrice, double rentPrice,
                                            int mode, boolean canBuy, boolean canRent) {
-        Minecraft.getInstance().setScreen(new RoomOfferScreen(roomId, roomName, buyPrice, rentPrice, mode, canBuy, canRent));
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player != null) {
+            mc.setScreen(new RoomOfferScreen(roomId, roomName, buyPrice, rentPrice, mode, canBuy, canRent));
+        }
     }
 
     public static void handleSyncClaimData(String jsonMapData, boolean isAdminMap) {

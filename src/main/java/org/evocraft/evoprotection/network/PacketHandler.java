@@ -30,7 +30,7 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
 public class PacketHandler {
-    private static final String PROTOCOL_VERSION = "3";
+    private static final String PROTOCOL_VERSION = "4";
     private static final int MAX_CLAIM_ID_LENGTH = 512;
     private static final int MAX_CLAIM_NAME_LENGTH = 64;
     private static final int MAX_FLAG_NAME_LENGTH = 32;
@@ -45,6 +45,7 @@ public class PacketHandler {
     );
 
     private static int packetId = 0;
+    private static boolean isRegistered = false;
     private static int nextId() { return packetId++; }
 
     private static boolean handleC2S(Supplier<NetworkEvent.Context> supplier, Consumer<ServerPlayer> action) {
@@ -70,27 +71,37 @@ public class PacketHandler {
         return allowed[0];
     }
 
-    public static void register() {
-        INSTANCE.registerMessage(nextId(), S2C_SyncClaimData.class, S2C_SyncClaimData::toBytes, S2C_SyncClaimData::new, S2C_SyncClaimData::handle);
-        INSTANCE.registerMessage(nextId(), C2S_BuyClaimSlot.class, C2S_BuyClaimSlot::toBytes, C2S_BuyClaimSlot::new, C2S_BuyClaimSlot::handle);
-        INSTANCE.registerMessage(nextId(), C2S_ClaimAction.class, C2S_ClaimAction::toBytes, C2S_ClaimAction::new, C2S_ClaimAction::handle);
-        INSTANCE.registerMessage(nextId(), C2S_AdminClaimAction.class, C2S_AdminClaimAction::toBytes, C2S_AdminClaimAction::new, C2S_AdminClaimAction::handle);
-        INSTANCE.registerMessage(nextId(), C2S_ManageTrust.class, C2S_ManageTrust::toBytes, C2S_ManageTrust::new, C2S_ManageTrust::handle);
-        INSTANCE.registerMessage(nextId(), S2C_ChunkEnter.class, S2C_ChunkEnter::toBytes, S2C_ChunkEnter::new, S2C_ChunkEnter::handle);
-        INSTANCE.registerMessage(nextId(), C2S_UpdateFlag.class, C2S_UpdateFlag::toBytes, C2S_UpdateFlag::new, C2S_UpdateFlag::handle);
-        INSTANCE.registerMessage(nextId(), S2C_UpdateProtectionMode.class, S2C_UpdateProtectionMode::toBytes, S2C_UpdateProtectionMode::new, S2C_UpdateProtectionMode::handle);
-        INSTANCE.registerMessage(nextId(), C2S_DeleteClaimByName.class, C2S_DeleteClaimByName::toBytes, C2S_DeleteClaimByName::new, C2S_DeleteClaimByName::handle);
-        INSTANCE.registerMessage(nextId(), S2C_SyncPayDay.class, S2C_SyncPayDay::toBytes, S2C_SyncPayDay::new, S2C_SyncPayDay::handle);
+    public static void clearRuntime() {
+        LAST_C2S_NANOS.clear();
+    }
 
-        INSTANCE.registerMessage(nextId(), S2C_SyncLanguage.class, S2C_SyncLanguage::toBytes, S2C_SyncLanguage::new, S2C_SyncLanguage::handle);
-        INSTANCE.registerMessage(nextId(), S2C_EnvironmentOverride.class, S2C_EnvironmentOverride::toBytes, S2C_EnvironmentOverride::new, S2C_EnvironmentOverride::handle);
-        INSTANCE.registerMessage(nextId(), S2C_OpenRoomOffer.class, S2C_OpenRoomOffer::toBytes, S2C_OpenRoomOffer::new, S2C_OpenRoomOffer::handle);
-        INSTANCE.registerMessage(nextId(), C2S_RoomOfferChoice.class, C2S_RoomOfferChoice::toBytes, C2S_RoomOfferChoice::new, C2S_RoomOfferChoice::handle);
-        INSTANCE.registerMessage(nextId(), C2S_LeaveProtection.class, C2S_LeaveProtection::toBytes, C2S_LeaveProtection::new, C2S_LeaveProtection::handle);
+    public static synchronized void register() {
+        if (isRegistered) return;
+        isRegistered = true;
+
+        java.util.Optional<net.minecraftforge.network.NetworkDirection> s2c =
+                java.util.Optional.of(net.minecraftforge.network.NetworkDirection.PLAY_TO_CLIENT);
+        java.util.Optional<net.minecraftforge.network.NetworkDirection> c2s =
+                java.util.Optional.of(net.minecraftforge.network.NetworkDirection.PLAY_TO_SERVER);
+
+        INSTANCE.registerMessage(nextId(), S2C_SyncClaimData.class, S2C_SyncClaimData::toBytes, S2C_SyncClaimData::new, S2C_SyncClaimData::handle, s2c);
+        INSTANCE.registerMessage(nextId(), C2S_BuyClaimSlot.class, C2S_BuyClaimSlot::toBytes, C2S_BuyClaimSlot::new, C2S_BuyClaimSlot::handle, c2s);
+        INSTANCE.registerMessage(nextId(), C2S_ClaimAction.class, C2S_ClaimAction::toBytes, C2S_ClaimAction::new, C2S_ClaimAction::handle, c2s);
+        INSTANCE.registerMessage(nextId(), C2S_AdminClaimAction.class, C2S_AdminClaimAction::toBytes, C2S_AdminClaimAction::new, C2S_AdminClaimAction::handle, c2s);
+        INSTANCE.registerMessage(nextId(), C2S_ManageTrust.class, C2S_ManageTrust::toBytes, C2S_ManageTrust::new, C2S_ManageTrust::handle, c2s);
+        INSTANCE.registerMessage(nextId(), S2C_ChunkEnter.class, S2C_ChunkEnter::toBytes, S2C_ChunkEnter::new, S2C_ChunkEnter::handle, s2c);
+        INSTANCE.registerMessage(nextId(), C2S_UpdateFlag.class, C2S_UpdateFlag::toBytes, C2S_UpdateFlag::new, C2S_UpdateFlag::handle, c2s);
+        INSTANCE.registerMessage(nextId(), C2S_DeleteClaimByName.class, C2S_DeleteClaimByName::toBytes, C2S_DeleteClaimByName::new, C2S_DeleteClaimByName::handle, c2s);
+
+        INSTANCE.registerMessage(nextId(), S2C_SyncLanguage.class, S2C_SyncLanguage::toBytes, S2C_SyncLanguage::new, S2C_SyncLanguage::handle, s2c);
+        INSTANCE.registerMessage(nextId(), S2C_EnvironmentOverride.class, S2C_EnvironmentOverride::toBytes, S2C_EnvironmentOverride::new, S2C_EnvironmentOverride::handle, s2c);
+        INSTANCE.registerMessage(nextId(), S2C_OpenRoomOffer.class, S2C_OpenRoomOffer::toBytes, S2C_OpenRoomOffer::new, S2C_OpenRoomOffer::handle, s2c);
+        INSTANCE.registerMessage(nextId(), C2S_RoomOfferChoice.class, C2S_RoomOfferChoice::toBytes, C2S_RoomOfferChoice::new, C2S_RoomOfferChoice::handle, c2s);
+        INSTANCE.registerMessage(nextId(), C2S_LeaveProtection.class, C2S_LeaveProtection::toBytes, C2S_LeaveProtection::new, C2S_LeaveProtection::handle, c2s);
     }
 
     public static <MSG> void sendToPlayer(MSG message, ServerPlayer player) {
-        if(player != null) {
+        if (player != null && player.connection != null && !player.hasDisconnected()) {
             INSTANCE.send(PacketDistributor.PLAYER.with(() -> player), message);
         }
     }
@@ -100,17 +111,12 @@ public class PacketHandler {
         @net.minecraftforge.eventbus.api.SubscribeEvent
         public static void onPlayerJoin(net.minecraftforge.event.entity.player.PlayerEvent.PlayerLoggedInEvent event) {
             if (!event.getEntity().level().isClientSide && event.getEntity() instanceof ServerPlayer player) {
-                boolean isPlot = org.evocraft.evoprotection.manager.ProtectionConfig.get().isPlotMode;
-                int pSize = org.evocraft.evoprotection.manager.ProtectionConfig.get().plotSizeChunks;
-                int rSize = org.evocraft.evoprotection.manager.ProtectionConfig.get().roadSizeChunks;
-                INSTANCE.send(PacketDistributor.PLAYER.with(() -> player), new S2C_UpdateProtectionMode(isPlot, pSize, rSize));
-
                 // Reload and send fresh language from launcher (searching by NAME this time)
                 String playerName = player.getGameProfile().getName();
                 ClaimManager.get().reloadPlayerLanguage(player.getUUID(), playerName);
                 String lang = ClaimManager.get().getPlayerLanguage(player.getUUID());
 
-                INSTANCE.send(PacketDistributor.PLAYER.with(() -> player), new S2C_SyncLanguage(lang));
+                sendToPlayer(new S2C_SyncLanguage(lang), player);
             }
         }
 
@@ -123,40 +129,18 @@ public class PacketHandler {
     public static class S2C_SyncLanguage {
         public final String lang;
         public S2C_SyncLanguage(String lang) {
-            this.lang = lang;
+            this.lang = lang == null ? "ro" : lang;
         }
         public S2C_SyncLanguage(FriendlyByteBuf buf) {
-            this.lang = buf.readUtf();
+            this.lang = buf.readUtf(16);
         }
         public void toBytes(FriendlyByteBuf buf) {
-            buf.writeUtf(lang);
+            buf.writeUtf(lang, 16);
         }
         public boolean handle(Supplier<NetworkEvent.Context> ctx) {
             ctx.get().enqueueWork(() -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> {
                 ClientPacketHandler.handleSyncLanguage(lang);
             }));
-            ctx.get().setPacketHandled(true);
-            return true;
-        }
-    }
-
-    public static class S2C_SyncPayDay {
-        public final int secondsLeft;
-        public final boolean isIdle;
-        public S2C_SyncPayDay(int secondsLeft, boolean isIdle) {
-            this.secondsLeft = secondsLeft;
-            this.isIdle = isIdle;
-        }
-        public S2C_SyncPayDay(FriendlyByteBuf buf) {
-            this.secondsLeft = buf.readInt();
-            this.isIdle = buf.readBoolean();
-        }
-        public void toBytes(FriendlyByteBuf buf) {
-            buf.writeInt(secondsLeft);
-            buf.writeBoolean(isIdle);
-        }
-        public boolean handle(Supplier<NetworkEvent.Context> ctx) {
-            ctx.get().enqueueWork(() -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> ClientPacketHandler.handleSyncPayDay(secondsLeft, isIdle)));
             ctx.get().setPacketHandled(true);
             return true;
         }
@@ -302,47 +286,16 @@ public class PacketHandler {
         }
     }
 
-    public static class S2C_UpdateProtectionMode {
-        public final boolean isPlotMode;
-        public final int plotSize;
-        public final int roadSize;
-        public S2C_UpdateProtectionMode(boolean isPlotMode, int plotSize, int roadSize) {
-            this.isPlotMode = isPlotMode;
-            this.plotSize = plotSize;
-            this.roadSize = roadSize;
-        }
-        public S2C_UpdateProtectionMode(FriendlyByteBuf buf) {
-            this.isPlotMode = buf.readBoolean();
-            this.plotSize = buf.readInt();
-            this.roadSize = buf.readInt();
-        }
-        public void toBytes(FriendlyByteBuf buf) {
-            buf.writeBoolean(isPlotMode);
-            buf.writeInt(plotSize);
-            buf.writeInt(roadSize);
-        }
-        public boolean handle(Supplier<NetworkEvent.Context> ctx) {
-            ctx.get().enqueueWork(() -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> {
-                org.evocraft.evoprotection.gui.ClaimMapScreen.currentServerIsPlot = isPlotMode;
-                org.evocraft.evoprotection.gui.ClaimMapScreen.currentPlotSize = plotSize;
-                org.evocraft.evoprotection.gui.ClaimMapScreen.currentRoadSize = roadSize;
-                org.evocraft.evoprotection.client.ClientPayDayData.isActive = isPlotMode;
-            }));
-            ctx.get().setPacketHandled(true);
-            return true;
-        }
-    }
-
     public static class S2C_ChunkEnter {
         public final String name;
         public S2C_ChunkEnter(String name) {
-            this.name = name;
+            this.name = name == null ? "" : name;
         }
         public S2C_ChunkEnter(FriendlyByteBuf buf) {
-            this.name = buf.readUtf();
+            this.name = buf.readUtf(128);
         }
         public void toBytes(FriendlyByteBuf buf) {
-            buf.writeUtf(name);
+            buf.writeUtf(name, 128);
         }
         public void handle(Supplier<NetworkEvent.Context> ctx) {
             ctx.get().enqueueWork(() -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> org.evocraft.evoprotection.client.ChunkNotificationHandler.onEnterNewChunk(name)));
@@ -432,7 +385,7 @@ public class PacketHandler {
     public static class C2S_DeleteClaimByName {
         private final String claimName;
         public C2S_DeleteClaimByName(String claimName) {
-            this.claimName = claimName;
+            this.claimName = claimName == null ? "" : claimName;
         }
         public C2S_DeleteClaimByName(FriendlyByteBuf buf) {
             this.claimName = buf.readUtf(MAX_CLAIM_ID_LENGTH);
@@ -442,7 +395,7 @@ public class PacketHandler {
         }
         public boolean handle(Supplier<NetworkEvent.Context> supplier) {
             return handleC2S(supplier, player -> {
-                if (ClaimManager.get().unclaimGroupById(player, claimName)) {
+                if (!claimName.isEmpty() && ClaimManager.get().unclaimGroupById(player, claimName)) {
                     ClaimEnvironmentManager.get().refreshAllPlayers(player.getServer());
                 }
             });
@@ -491,8 +444,8 @@ public class PacketHandler {
         private final boolean isAdmin;
 
         public C2S_UpdateFlag(String claimName, String flagName, boolean state, boolean isAdmin) {
-            this.claimName = claimName;
-            this.flagName = flagName;
+            this.claimName = claimName == null ? "" : claimName;
+            this.flagName = flagName == null ? "" : flagName;
             this.state = state;
             this.isAdmin = isAdmin;
         }
@@ -510,7 +463,7 @@ public class PacketHandler {
         }
         public boolean handle(Supplier<NetworkEvent.Context> supplier) {
             return handleC2S(supplier, player -> {
-                    if (!ClaimManager.isSupportedFlagName(flagName)) return;
+                    if (claimName.isEmpty() || !ClaimManager.isSupportedFlagName(flagName)) return;
                     String lang = ClaimManager.get().getPlayerLanguage(player.getUUID());
 
                     if (ProtectionRoomManager.get().isClientRoomId(claimName)) {
@@ -565,7 +518,7 @@ public class PacketHandler {
             this.chunkX = chunkX;
             this.chunkZ = chunkZ;
             this.isClaiming = isClaiming;
-            this.customName = customName;
+            this.customName = customName == null ? "" : customName;
         }
         public C2S_ClaimAction(FriendlyByteBuf buf) {
             this.chunkX = buf.readInt();
@@ -605,7 +558,7 @@ public class PacketHandler {
             this.chunkX = chunkX;
             this.chunkZ = chunkZ;
             this.isClaiming = isClaiming;
-            this.customName = customName;
+            this.customName = customName == null ? "" : customName;
         }
         public C2S_AdminClaimAction(FriendlyByteBuf buf) {
             this.chunkX = buf.readInt();
@@ -621,7 +574,7 @@ public class PacketHandler {
         }
         public boolean handle(Supplier<NetworkEvent.Context> supplier) {
             return handleC2S(supplier, player -> {
-                if (player.hasPermissions(2)) {
+                if (ProtectionPermissions.hasAdminAccess(player)) {
                     ChunkPos target = new ChunkPos(chunkX, chunkZ);
                     if (!ClaimManager.get().isChunkInsideClientMap(player, target)) return;
                     String dim = player.level().dimension().location().toString();
@@ -647,10 +600,10 @@ public class PacketHandler {
         private final String role;
 
         public C2S_ManageTrust(String targetName, String targetUuidStr, boolean isAdding, String claimName, String role) {
-            this.targetName = targetName;
-            this.targetUuidStr = targetUuidStr;
+            this.targetName = targetName == null ? "" : targetName;
+            this.targetUuidStr = targetUuidStr == null ? "" : targetUuidStr;
             this.isAdding = isAdding;
-            this.claimName = claimName;
+            this.claimName = claimName == null ? "" : claimName;
             this.role = ClaimManager.normalizeTrustRole(role);
         }
         public C2S_ManageTrust(FriendlyByteBuf buf) {
@@ -669,17 +622,18 @@ public class PacketHandler {
         }
         public boolean handle(Supplier<NetworkEvent.Context> supplier) {
             return handleC2S(supplier, player -> {
+                    if (claimName.isEmpty()) return;
                     String lang = ClaimManager.get().getPlayerLanguage(player.getUUID());
                     if (isAdding) {
                         UUID targetUuid = null;
                         String targetDisplay = targetName;
-                        if (targetUuidStr != null && !targetUuidStr.isEmpty()) {
+                        if (!targetUuidStr.isEmpty()) {
                             try {
                                 targetUuid = UUID.fromString(targetUuidStr);
                             } catch (Exception ignored) { }
                         }
 
-                        if (targetUuid == null) {
+                        if (targetUuid == null && player.getServer() != null) {
                             ServerPlayer target = player.getServer().getPlayerList().getPlayerByName(targetName);
                             if (target != null) {
                                 targetUuid = target.getUUID();

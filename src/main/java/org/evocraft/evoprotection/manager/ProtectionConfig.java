@@ -5,6 +5,7 @@ import com.google.gson.GsonBuilder;
 import net.minecraftforge.fml.loading.FMLPaths;
 
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 
 public class ProtectionConfig {
     private static ProtectionConfig INSTANCE;
@@ -12,37 +13,36 @@ public class ProtectionConfig {
     private static final File FILE = FMLPaths.CONFIGDIR.get().resolve("evo_protection_settings.json").toFile();
 
     // --- SETĂRILE GLOBALE ---
-    public boolean isPlotMode = true; // ACTIVAT PENTRU CREATIVE!
     public String language = "ro"; // LIMBA ACTUALA: ro sau en
-
-    // MATEMATICA GRID-ULUI
-    public int plotSizeChunks = 4; // 4x4 Chunk-uri (64x64 blocuri per plot = 16 chunk-uri)
-    public int roadSizeChunks = 1; // 1 Chunk lățime drum (16 blocuri)
-    public int spawnRadiusPlots = 0; // 0 = rezervă doar Plot-ul central (0,0), adică fix 16 Chunk-uri pentru Spawn!
-
-    // ÎNĂLȚIMEA DRUMURILOR (Aici e fixul pentru podea)
-    public boolean useFixedYLevel = true;
-    public int plotYLevel = -61; // Setat EXACT pe nivelul podelei tale din poză!
-
-    // BLOCURILE GENERATE AUTOMAT
-    public String borderBlock = "minecraft:smooth_stone_slab"; // Bordura plotului
-    public String roadBlock = "minecraft:black_terracotta"; // Asfaltul drumului
-    public String lineBlock = "minecraft:white_concrete"; // Linia de pe mijlocul drumului
 
     public static void load() {
         if (FILE.exists()) {
-            try (Reader reader = new FileReader(FILE)) {
+            try (Reader reader = new InputStreamReader(new FileInputStream(FILE), StandardCharsets.UTF_8)) {
                 INSTANCE = GSON.fromJson(reader, ProtectionConfig.class);
             } catch (Exception e) { e.printStackTrace(); }
         }
         if (INSTANCE == null) {
             INSTANCE = new ProtectionConfig();
+            INSTANCE.validate();
             INSTANCE.save();
+        } else {
+            INSTANCE.validate();
+        }
+    }
+
+    private void validate() {
+        if (language == null || (!language.equalsIgnoreCase("en") && !language.equalsIgnoreCase("ro"))) {
+            language = "ro";
+        } else {
+            language = language.toLowerCase(java.util.Locale.ROOT);
         }
     }
 
     public void save() {
-        try (Writer writer = new FileWriter(FILE)) {
+        if (FILE.getParentFile() != null && !FILE.getParentFile().exists()) {
+            FILE.getParentFile().mkdirs();
+        }
+        try (Writer writer = new OutputStreamWriter(new FileOutputStream(FILE), StandardCharsets.UTF_8)) {
             GSON.toJson(this, writer);
         } catch (Exception e) { e.printStackTrace(); }
     }

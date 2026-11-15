@@ -24,10 +24,6 @@ import java.util.Set;
 
 public class ClaimMapScreen extends Screen {
 
-    public static boolean currentServerIsPlot = false;
-    public static int currentPlotSize = 4;
-    public static int currentRoadSize = 1;
-
     private static final int BORDER_COLOR = 0xFF83B755;
     private static final int BG_COLOR = 0xEE0D140D;
 
@@ -100,9 +96,7 @@ public class ClaimMapScreen extends Screen {
         int finalX = (sw - targetW) / 2;
         int finalY = (sh - targetH) / 2;
 
-        boolean isPlot = currentServerIsPlot;
-
-        String fieldText = isPlot ? LanguageManager.get("gui.map.plot_name") : LanguageManager.get("gui.map.chunk_name");
+        String fieldText = LanguageManager.get("gui.map.chunk_name");
         nameField = new EditBox(this.font, finalX + 20, finalY + targetH - 30, 110, 20, Component.literal(fieldText));
         nameField.setMaxLength(20);
         nameField.visible = false;
@@ -110,8 +104,7 @@ public class ClaimMapScreen extends Screen {
 
         // The language button was REMOVED as requested
 
-        String upgradeBtnText = isPlot ? LanguageManager.get("gui.button.buy_plot") : LanguageManager.get("gui.button.buy_chunk");
-        buttons.add(new CustomButton(upgradeBtnText, finalX + 135, finalY + targetH - 30, 115, 20, () -> {
+        buttons.add(new CustomButton(LanguageManager.get("gui.button.buy_chunk"), finalX + 135, finalY + targetH - 30, 115, 20, () -> {
             if (cachedData != null) {
                 if (ClientBalanceData.getBalance() >= cachedData.nextSlotCost) {
                     PacketHandler.INSTANCE.sendToServer(new PacketHandler.C2S_BuyClaimSlot());
@@ -122,43 +115,38 @@ public class ClaimMapScreen extends Screen {
             }
         }));
 
-        if (isPlot) {
-            buttons.add(new CustomButton(LanguageManager.get("gui.button.friends"), finalX + 255, finalY + targetH - 30, 80, 20, () -> {
-                if (cachedData != null) {
-                    Set<String> trustClaims = cachedData.trustClaimNames != null ? cachedData.trustClaimNames : cachedData.allClaimNames;
-                    this.minecraft.setScreen(new TrustScreen(this, cachedData.trustedPerClaim, cachedData.trustedRolesPerClaim, trustClaims, cachedData.claimDisplayNames));
-                }
-            }));
-            buttons.add(new CustomButton(LanguageManager.get("gui.button.delete"), finalX + 340, finalY + targetH - 30, 80, 20, () -> {
-                if (cachedData != null) this.minecraft.setScreen(new DeleteClaimScreen(this, cachedData.allClaimNames, cachedData.claimDisplayNames));
-            }));
-        } else {
-            buttons.add(new CustomButton(LanguageManager.get("gui.button.friends"), finalX + 255, finalY + targetH - 30, 75, 20, () -> {
-                if (cachedData != null) {
-                    Set<String> trustClaims = cachedData.trustClaimNames != null ? cachedData.trustClaimNames : cachedData.allClaimNames;
-                    this.minecraft.setScreen(new TrustScreen(this, cachedData.trustedPerClaim, cachedData.trustedRolesPerClaim, trustClaims, cachedData.claimDisplayNames));
-                }
-            }));
-            buttons.add(new CustomButton(LanguageManager.get("gui.button.settings"), finalX + 335, finalY + targetH - 30, 75, 20, () -> {
-                if (cachedData != null) {
-                    Set<String> flagClaims = cachedData.flagClaimNames != null ? cachedData.flagClaimNames : cachedData.allClaimNames;
-                    this.minecraft.setScreen(new FlagScreen(this, cachedData.myFlags, flagClaims,
-                            cachedData.claimDisplayNames, cachedData.claimOwnerNames,
-                            cachedData.viewerRoles, cachedData.leaveableClaimNames));
-                }
-            }));
-            buttons.add(new CustomButton(LanguageManager.get("gui.button.delete"), finalX + 415, finalY + targetH - 30, 70, 20, () -> {
-                if (cachedData != null) this.minecraft.setScreen(new DeleteClaimScreen(this, cachedData.allClaimNames, cachedData.claimDisplayNames));
-            }));
-        }
+        buttons.add(new CustomButton(LanguageManager.get("gui.button.friends"), finalX + 255, finalY + targetH - 30, 75, 20, () -> {
+            if (cachedData != null && this.minecraft != null) {
+                Set<String> trustClaims = cachedData.trustClaimNames != null ? cachedData.trustClaimNames : cachedData.allClaimNames;
+                this.minecraft.setScreen(new TrustScreen(this, cachedData.trustedPerClaim, cachedData.trustedRolesPerClaim, trustClaims, cachedData.claimDisplayNames));
+            }
+        }));
+        buttons.add(new CustomButton(LanguageManager.get("gui.button.settings"), finalX + 335, finalY + targetH - 30, 75, 20, () -> {
+            if (cachedData != null && this.minecraft != null) {
+                Set<String> flagClaims = cachedData.flagClaimNames != null ? cachedData.flagClaimNames : cachedData.allClaimNames;
+                this.minecraft.setScreen(new FlagScreen(this, cachedData.myFlags, flagClaims,
+                        cachedData.claimDisplayNames, cachedData.claimOwnerNames,
+                        cachedData.viewerRoles, cachedData.leaveableClaimNames));
+            }
+        }));
+        buttons.add(new CustomButton(LanguageManager.get("gui.button.delete"), finalX + 415, finalY + targetH - 30, 70, 20, () -> {
+            if (cachedData != null && this.minecraft != null) this.minecraft.setScreen(new DeleteClaimScreen(this, cachedData.allClaimNames, cachedData.claimDisplayNames));
+        }));
         generateMapTexture();
     }
 
     public void updateData(String json) {
-        this.cachedData = new Gson().fromJson(json, ClaimManager.SyncData.class);
+        if (json == null || json.isBlank()) return;
+        try {
+            ClaimManager.SyncData parsed = new Gson().fromJson(json, ClaimManager.SyncData.class);
+            if (parsed != null) {
+                this.cachedData = parsed;
+            }
+        } catch (Exception ignored) { }
     }
 
     private void generateMapTexture() {
+        if (this.minecraft == null || this.centerChunk == null) return;
         int mapDiameterChunks = this.radius * 2 + 1;
         int mapBlocks = mapDiameterChunks * 16;
         int finalImageSize = mapBlocks * this.pixelScale;
@@ -214,15 +202,6 @@ public class ClaimMapScreen extends Screen {
         mapTextureLocation = this.minecraft.getTextureManager().register("evo_claim_map", mapTexture);
     }
 
-    private boolean isRoad(int chunkX, int chunkZ) {
-        if (!currentServerIsPlot) return false;
-        int P = currentPlotSize;
-        int C = P + currentRoadSize;
-        int localX = ((chunkX % C) + C) % C;
-        int localZ = ((chunkZ % C) + C) % C;
-        return localX >= P || localZ >= P;
-    }
-
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
         this.renderBackground(g);
@@ -246,9 +225,8 @@ public class ClaimMapScreen extends Screen {
         fillRounded(g, x, y, w, h, BG_COLOR);
         outlineRounded(g, x, y, w, h, BORDER_COLOR);
 
-        boolean isPlot = currentServerIsPlot;
-        String title = isPlot ? LanguageManager.get("gui.map.title_plot") : LanguageManager.get("gui.map.title_chunk");
-        String limitText = isPlot ? LanguageManager.get("gui.map.limit_plot") : LanguageManager.get("gui.map.limit_chunk");
+        String title = LanguageManager.get("gui.map.title_chunk");
+        String limitText = LanguageManager.get("gui.map.limit_chunk");
 
         g.drawCenteredString(this.font, title, sw / 2, y + 12, BORDER_COLOR);
         g.fill(x, y + 28, x + w, y + 29, 0xFF3A592D);
@@ -276,7 +254,7 @@ public class ClaimMapScreen extends Screen {
                 g.drawString(this.font, LanguageManager.get("gui.map.price", EvoCurrencyFormatter.formatWithCurrency(cachedData.nextSlotCost)), infoX, infoY + 65, 0xAAAAAA, false);
             }
             g.drawString(this.font, LanguageManager.get("gui.map.click_info"), infoX, infoY + 110, 0xAAAAAA, false);
-            g.drawString(this.font, isPlot ? LanguageManager.get("gui.map.click_plot") : LanguageManager.get("gui.map.click_chunk"), infoX, infoY + 125, 0xAAAAAA, false);
+            g.drawString(this.font, LanguageManager.get("gui.map.click_chunk"), infoX, infoY + 125, 0xAAAAAA, false);
             g.drawString(this.font, LanguageManager.get("gui.map.click_delete"), infoX, infoY + 140, 0xAAAAAA, false);
             for (CustomButton b : buttons) b.render(g, smx, smy, this.font);
         }
@@ -293,9 +271,9 @@ public class ClaimMapScreen extends Screen {
     }
 
     private void drawClaimsOverlay(GuiGraphics g, int mx, int my, int startX, int startY) {
+        if (centerChunk == null) return;
         String tooltipL1 = null;
         String tooltipL2 = null;
-        boolean isPlot = currentServerIsPlot;
 
         for (int cx = -this.radius; cx <= this.radius; cx++) {
             for (int cz = -this.radius; cz <= this.radius; cz++) {
@@ -307,16 +285,7 @@ public class ClaimMapScreen extends Screen {
 
                 g.renderOutline(drawX, drawY, this.chunkSize, this.chunkSize, 0x2AFFFFFF);
 
-                if (isRoad(rChunkX, rChunkZ)) {
-                    g.fill(drawX, drawY, drawX + this.chunkSize, drawY + this.chunkSize, 0x77555555);
-                    if (mx >= drawX && mx <= drawX + this.chunkSize && my >= drawY && my <= drawY + this.chunkSize) {
-                        tooltipL1 = "§7[Public Road]";
-                        g.fill(drawX, drawY, drawX + this.chunkSize, drawY + this.chunkSize, 0x33FFFFFF);
-                    }
-                    continue;
-                }
-
-                ClaimManager.ClientClaimInfo info = cachedData != null ? cachedData.map.get(key) : null;
+                ClaimManager.ClientClaimInfo info = (cachedData != null && cachedData.map != null) ? cachedData.map.get(key) : null;
 
                 if (info != null) {
                     boolean isMine = info.ownerUUID != null && Minecraft.getInstance().player != null && info.ownerUUID.equals(Minecraft.getInstance().player.getUUID());
@@ -338,11 +307,11 @@ public class ClaimMapScreen extends Screen {
                 if (mx >= drawX && mx <= drawX + this.chunkSize && my >= drawY && my <= drawY + this.chunkSize) {
                     g.fill(drawX, drawY, drawX + this.chunkSize, drawY + this.chunkSize, 0x33FFFFFF);
                     if (info != null) {
-                        String prefix = isPlot ? "Plot" : "Chunk";
-                        tooltipL1 = info.ownerUUID != null && Minecraft.getInstance().player != null && info.ownerUUID.equals(Minecraft.getInstance().player.getUUID()) ? "§bYour " + prefix : "§cLand occupied by " + info.ownerName;
+                        String ownerName = info.ownerName != null ? info.ownerName : "Unknown";
+                        tooltipL1 = info.ownerUUID != null && Minecraft.getInstance().player != null && info.ownerUUID.equals(Minecraft.getInstance().player.getUUID()) ? "§bYour Chunk" : "§cLand occupied by " + ownerName;
                         if (info.customName != null && !info.customName.isEmpty()) tooltipL2 = "§8(§e" + info.customName + "§8)";
                     } else {
-                        tooltipL1 = isPlot ? "§aFree Plot (Click to buy)" : "§aFree Chunk (Click to buy)";
+                        tooltipL1 = "§aFree Chunk (Click to buy)";
                     }
                 }
             }
@@ -355,6 +324,7 @@ public class ClaimMapScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (centerChunk == null) return super.mouseClicked(mouseX, mouseY, button);
         float scale = getScale();
         double smx = mouseX / scale;
         double smy = mouseY / scale;
@@ -379,20 +349,14 @@ public class ClaimMapScreen extends Screen {
                     if (smx >= drawX && smx <= drawX + this.chunkSize && smy >= drawY && smy <= drawY + this.chunkSize) {
                         int rChunkX = centerChunk.x + cx;
                         int rChunkZ = centerChunk.z + cz;
-
-                        if (isRoad(rChunkX, rChunkZ)) {
-                            showMsg(LanguageManager.get("gui.map.road"), 0xFFFF5555, 60);
-                            return true;
-                        }
-
                         String key = rChunkX + ";" + rChunkZ;
 
-                        ClaimManager.ClientClaimInfo info = cachedData != null ? cachedData.map.get(key) : null;
-                        boolean isMine = info != null && Minecraft.getInstance().player != null && info.ownerUUID.equals(Minecraft.getInstance().player.getUUID());
+                        ClaimManager.ClientClaimInfo info = (cachedData != null && cachedData.map != null) ? cachedData.map.get(key) : null;
+                        boolean isMine = info != null && info.ownerUUID != null && Minecraft.getInstance().player != null && info.ownerUUID.equals(Minecraft.getInstance().player.getUUID());
 
                         if (info == null) {
                             String claimName = nameField != null ? nameField.getValue().trim() : "";
-                            if (claimName.isEmpty() || claimName.equals(LanguageManager.get("gui.map.plot_name")) || claimName.equals(LanguageManager.get("gui.map.chunk_name"))) {
+                            if (claimName.isEmpty() || claimName.equals(LanguageManager.get("gui.map.chunk_name"))) {
                                 showMsg(LanguageManager.get("gui.map.name_req"), 0xFFFF5555, 80);
                                 return true;
                             }

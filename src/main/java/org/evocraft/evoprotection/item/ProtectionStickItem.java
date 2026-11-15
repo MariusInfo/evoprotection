@@ -5,6 +5,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.context.UseOnContext;
+import org.evocraft.evoprotection.manager.ProtectionPermissions;
 import org.evocraft.evoprotection.manager.ProtectionRoomManager;
 
 public class ProtectionStickItem extends Item {
@@ -22,7 +23,7 @@ public class ProtectionStickItem extends Item {
             return InteractionResult.PASS;
         }
 
-        if (!player.hasPermissions(2)) {
+        if (!ProtectionPermissions.hasAdminAccess(player)) {
             player.sendSystemMessage(Component.literal("\u00A7c[EvoProtection] Only admins can use the Protection Stick."));
             return InteractionResult.FAIL;
         }

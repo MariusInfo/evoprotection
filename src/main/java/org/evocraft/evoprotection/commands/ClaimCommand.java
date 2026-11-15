@@ -25,22 +25,6 @@ public class ClaimCommand {
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
 
         // ==============================
-        // 🏗️ SISTEMUL NOU DE PLOT-URI
-        // ==============================
-        dispatcher.register(Commands.literal("plot")
-                .then(Commands.literal("auto").executes(ctx -> {
-                    ServerPlayer player = ctx.getSource().getPlayerOrException();
-                    ClaimManager.get().autoClaimPlot(player);
-                    return 1;
-                }))
-                .then(Commands.literal("home").executes(ctx -> {
-                    ServerPlayer player = ctx.getSource().getPlayerOrException();
-                    ClaimManager.get().teleportToHomePlot(player);
-                    return 1;
-                }))
-        );
-
-        // ==============================
         // COMANDA DE ADMIN
         // ==============================
         dispatcher.register(Commands.literal("evo")
